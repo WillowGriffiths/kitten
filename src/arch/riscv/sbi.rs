@@ -145,7 +145,7 @@ fn sbi_call(
     (error, value)
 }
 
-pub fn print(s: &str) {
+pub fn print_str(s: &str) {
     let virtual_diff: usize = 0xffffffff80000000 - 0x80000000;
 
     let bytes = s.as_bytes();
