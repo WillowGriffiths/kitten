@@ -11,6 +11,8 @@ fn panic(_info: &PanicInfo) -> ! {
 }
 
 pub fn main() -> ! {
+    arch::print("Hello world! :)\n");
+
     loop {
         arch::wfi();
     }
