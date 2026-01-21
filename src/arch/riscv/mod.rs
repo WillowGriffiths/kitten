@@ -1,11 +1,9 @@
-use core::arch::global_asm;
+use core::arch::asm;
 
-global_asm!(
-    "
-    .section .text.boot
-    .global _start
-    _start:
-    1:  wfi
-        j 1b
-    "
-);
+mod boot;
+
+pub fn wfi() {
+    unsafe {
+        asm!("wfi");
+    }
+}

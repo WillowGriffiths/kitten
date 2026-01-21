@@ -4,5 +4,6 @@ target = "riscv64gc-unknown-none-elf"
 [target.riscv64gc-unknown-none-elf]
 rustflags = [
     "-C", "link-arg=-Tsrc/arch/riscv/link.x",
+    "-C", "code-model=medium",
 ]
 runner = "qemu-system-riscv64 -s -machine virt -bios fw_dynamic.bin -serial stdio -smp cores=4 -kernel"

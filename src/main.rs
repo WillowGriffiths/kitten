@@ -10,5 +10,8 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn main() {}
+pub fn main() -> ! {
+    loop {
+        arch::wfi();
+    }
+}
