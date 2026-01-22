@@ -10,7 +10,10 @@ extern "C" fn rust_entry(hart_id: u64, fdt: *const u8) -> ! {
     let fdt_info = super::device_tree::FdtInfo::new(fdt);
     let boot_info = fdt_info.boot_info();
 
-    println!("boot info: {boot_info:#x?}");
+    println!(
+        "found {} harts, {}B of memory",
+        boot_info.cpus, boot_info.memory.len
+    );
 
     crate::main();
 }

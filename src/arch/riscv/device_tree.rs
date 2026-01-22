@@ -24,14 +24,15 @@ struct FdtNode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MemoryRange {
-    start: u64,
-    len: u64,
+    pub start: u64,
+    pub len: u64,
 }
 
 #[derive(Debug)]
 pub struct BootInfo {
-    memory: MemoryRange,
-    resv: Option<(usize, [MemoryRange; 16])>,
+    pub memory: MemoryRange,
+    pub resv: Option<(usize, [MemoryRange; 16])>,
+    pub cpus: usize,
 }
 
 impl FdtInfo {
@@ -84,6 +85,19 @@ impl FdtInfo {
         panic!("No range found");
     }
 
+    fn parse_cpus(node: &mut FdtNode) -> usize {
+        let mut cpus = 0;
+        for child in node {
+            if let FdtNodeChild::Node(node) = child
+                && node.name.to_str().unwrap().starts_with("cpu@")
+            {
+                cpus += 1;
+            }
+        }
+
+        cpus
+    }
+
     fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange; 16]) {
         let mut resv = [MemoryRange { start: 0, len: 0 }; 16];
         let mut resv_count = 0;
@@ -91,7 +105,6 @@ impl FdtInfo {
         for child in node {
             if let FdtNodeChild::Node(node) = child {
                 let name = node.name;
-                println!("{name:?}");
                 for child in node {
                     if let FdtNodeChild::Prop(name, data) = child
                         && name == c"reg"
@@ -120,6 +133,7 @@ impl FdtInfo {
     pub fn boot_info(&self) -> BootInfo {
         let mut memory: Option<MemoryRange> = None;
         let mut resv = None;
+        let mut cpus = 0;
 
         for child in self.root_node() {
             if let FdtNodeChild::Node(mut node) = child {
@@ -136,6 +150,8 @@ impl FdtInfo {
                     }
 
                     resv = Some(Self::parse_reserved_memory(&mut node));
+                } else if name == "cpus" {
+                    cpus = Self::parse_cpus(&mut node);
                 }
             }
         }
@@ -143,6 +159,7 @@ impl FdtInfo {
         BootInfo {
             memory: memory.expect("Found no memory"),
             resv,
+            cpus,
         }
     }
 
