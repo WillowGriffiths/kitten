@@ -1,6 +1,6 @@
 use core::{ffi::CStr, slice};
 
-use crate::arch::println;
+use crate::arch::{print, println};
 
 #[derive(Debug)]
 enum FdtToken {
@@ -118,7 +118,17 @@ impl Iterator for FdtIterator {
 pub fn parse(fdt: *const u8) {
     let info = FdtInfo::new(fdt);
 
+    let mut depth = 0;
     for token in info.iter() {
+        if let FdtToken::NodeEnd = token {
+            depth -= 1;
+        }
+        for _ in 0..depth {
+            print!("  ");
+        }
         println!("{token:?}");
+        if let FdtToken::NodeBegin(_) = token {
+            depth += 1;
+        }
     }
 }
