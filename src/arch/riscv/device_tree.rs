@@ -1,27 +1,42 @@
 use core::{ffi::CStr, slice};
 
-use crate::arch::{print, println};
+use crate::arch::println;
 
 #[derive(Debug)]
 enum FdtToken {
-    NodeBegin(&'static CStr),
+    NodeBegin(FdtNode),
     NodeEnd,
     Prop(&'static CStr, &'static [u8]),
 }
 
-struct FdtInfo {
+pub struct FdtInfo {
     header: *const u32,
     dt_struct: *const u8,
     dt_strings: *const u8,
 }
 
-struct FdtIterator {
+#[derive(Debug)]
+struct FdtNode {
+    name: &'static CStr,
     dt_strings: *const u8,
     dt_struct: *const u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct MemoryRange {
+    start: u64,
+    len: u64,
+}
+
+#[derive(Debug)]
+pub struct BootInfo {
+    memory: MemoryRange,
+    resv_count: usize,
+    resv: [MemoryRange; 16],
+}
+
 impl FdtInfo {
-    fn new(fdt: *const u8) -> FdtInfo {
+    pub fn new(fdt: *const u8) -> FdtInfo {
         unsafe {
             let header = fdt as *const u32;
             let magic = u32::from_be(*header);
@@ -51,10 +66,77 @@ impl FdtInfo {
         }
     }
 
-    fn iter(&self) -> FdtIterator {
-        FdtIterator {
-            dt_strings: self.dt_strings,
-            dt_struct: self.dt_struct,
+    fn parse_memory(node: &mut FdtNode) -> MemoryRange {
+        for child in node {
+            if let FdtNodeChild::Prop(name, data) = child
+                && name == c"reg"
+            {
+                let ranges = data.len() / 16;
+                if ranges != 1 {
+                    panic!("only one memory range is supported");
+                }
+                let start = u64::from_be_bytes(data[0..8].try_into().unwrap());
+                let len = u64::from_be_bytes(data[8..16].try_into().unwrap());
+
+                return MemoryRange { start, len };
+            }
+        }
+
+        panic!("No range found");
+    }
+
+    pub fn boot_info(&self) -> BootInfo {
+        let mut memory: Option<MemoryRange> = None;
+        let mut resv = [MemoryRange { start: 0, len: 0 }; 16];
+        let mut resv_count = 0;
+
+        for child in self.root_node() {
+            if let FdtNodeChild::Node(mut node) = child {
+                let name = node.name.to_str().unwrap();
+                if name.starts_with("memory") {
+                    if memory.is_some() {
+                        panic!("only one memory range is supported");
+                    }
+
+                    memory = Some(Self::parse_memory(&mut node));
+                }
+            }
+        }
+
+        BootInfo {
+            memory: memory.expect("Found no memory"),
+            resv_count,
+            resv,
+        }
+    }
+
+    fn root_node(&self) -> FdtNode {
+        unsafe {
+            let mut ptr = self.dt_struct;
+            loop {
+                let token = u32::from_be(*(ptr as *const u32));
+                match token {
+                    FDT_NOP => {}
+                    FDT_BEGIN_NODE => {
+                        let name: &'static CStr = CStr::from_ptr(ptr.add(4));
+                        let bytes = name.count_bytes();
+
+                        ptr = ptr.add(4 + bytes + 1);
+                        ptr = ptr.add(ptr.align_offset(4));
+
+                        let node = FdtNode {
+                            name,
+                            dt_struct: ptr,
+                            dt_strings: self.dt_strings,
+                        };
+
+                        return node;
+                    }
+                    _ => panic!("unexpected token"),
+                };
+
+                ptr = ptr.add(4);
+            }
         }
     }
 }
@@ -65,10 +147,8 @@ const FDT_PROP: u32 = 0x03;
 const FDT_NOP: u32 = 0x04;
 const FDT_END: u32 = 0x09;
 
-impl Iterator for FdtIterator {
-    type Item = FdtToken;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl FdtNode {
+    fn consume_token(&mut self) -> Option<FdtToken> {
         unsafe {
             let mut token = u32::from_be(*(self.dt_struct as *const u32));
 
@@ -83,7 +163,13 @@ impl Iterator for FdtIterator {
                     let bytes = name.count_bytes();
                     self.dt_struct = self.dt_struct.add(4 + bytes + 1);
 
-                    Some(FdtToken::NodeBegin(name))
+                    let node = FdtNode {
+                        name,
+                        dt_struct: self.dt_struct,
+                        dt_strings: self.dt_strings,
+                    };
+
+                    Some(FdtToken::NodeBegin(node))
                 }
                 FDT_END_NODE => {
                     self.dt_struct = self.dt_struct.add(4);
@@ -115,20 +201,39 @@ impl Iterator for FdtIterator {
     }
 }
 
-pub fn parse(fdt: *const u8) {
-    let info = FdtInfo::new(fdt);
+enum FdtNodeChild {
+    Node(FdtNode),
+    Prop(&'static CStr, &'static [u8]),
+}
 
-    let mut depth = 0;
-    for token in info.iter() {
-        if let FdtToken::NodeEnd = token {
-            depth -= 1;
+impl Iterator for FdtNode {
+    type Item = FdtNodeChild;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(token) = self.consume_token() {
+            return match token {
+                FdtToken::NodeBegin(node) => {
+                    let mut depth = 1;
+                    while depth > 0 {
+                        let token = self.consume_token().unwrap();
+
+                        match token {
+                            FdtToken::NodeBegin(_) => depth += 1,
+                            FdtToken::NodeEnd => depth -= 1,
+                            _ => {}
+                        }
+                    }
+
+                    Some(FdtNodeChild::Node(node))
+                }
+                FdtToken::NodeEnd => unsafe {
+                    self.dt_struct = self.dt_struct.sub(4);
+                    None
+                },
+                FdtToken::Prop(name, data) => Some(FdtNodeChild::Prop(name, data)),
+            };
         }
-        for _ in 0..depth {
-            print!("  ");
-        }
-        println!("{token:?}");
-        if let FdtToken::NodeBegin(_) = token {
-            depth += 1;
-        }
+
+        panic!("reached end of FDT before node ended");
     }
 }
