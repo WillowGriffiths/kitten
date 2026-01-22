@@ -31,8 +31,7 @@ pub struct MemoryRange {
 #[derive(Debug)]
 pub struct BootInfo {
     memory: MemoryRange,
-    resv_count: usize,
-    resv: [MemoryRange; 16],
+    resv: Option<(usize, [MemoryRange; 16])>,
 }
 
 impl FdtInfo {
@@ -85,10 +84,42 @@ impl FdtInfo {
         panic!("No range found");
     }
 
-    pub fn boot_info(&self) -> BootInfo {
-        let mut memory: Option<MemoryRange> = None;
+    fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange; 16]) {
         let mut resv = [MemoryRange { start: 0, len: 0 }; 16];
         let mut resv_count = 0;
+
+        for child in node {
+            if let FdtNodeChild::Node(node) = child {
+                let name = node.name;
+                println!("{name:?}");
+                for child in node {
+                    if let FdtNodeChild::Prop(name, data) = child
+                        && name == c"reg"
+                    {
+                        let ranges = data.len() / 16;
+                        for i in 0..ranges {
+                            let start_index = 16 * i;
+                            let start = u64::from_be_bytes(
+                                data[start_index..start_index + 8].try_into().unwrap(),
+                            );
+                            let len = u64::from_be_bytes(
+                                data[start_index + 8..start_index + 16].try_into().unwrap(),
+                            );
+
+                            resv[resv_count] = MemoryRange { start, len };
+                            resv_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        (resv_count, resv)
+    }
+
+    pub fn boot_info(&self) -> BootInfo {
+        let mut memory: Option<MemoryRange> = None;
+        let mut resv = None;
 
         for child in self.root_node() {
             if let FdtNodeChild::Node(mut node) = child {
@@ -99,13 +130,18 @@ impl FdtInfo {
                     }
 
                     memory = Some(Self::parse_memory(&mut node));
+                } else if name == "reserved-memory" {
+                    if memory.is_some() {
+                        panic!("multiple reserved-memory nodes");
+                    }
+
+                    resv = Some(Self::parse_reserved_memory(&mut node));
                 }
             }
         }
 
         BootInfo {
             memory: memory.expect("Found no memory"),
-            resv_count,
             resv,
         }
     }
@@ -157,11 +193,12 @@ impl FdtNode {
                 token = u32::from_be(*(self.dt_struct as *const u32));
             }
 
-            let token = match token {
+            match token {
                 FDT_BEGIN_NODE => {
                     let name: &'static CStr = CStr::from_ptr(self.dt_struct.add(4));
                     let bytes = name.count_bytes();
                     self.dt_struct = self.dt_struct.add(4 + bytes + 1);
+                    self.dt_struct = self.dt_struct.add(self.dt_struct.align_offset(4));
 
                     let node = FdtNode {
                         name,
@@ -185,6 +222,7 @@ impl FdtNode {
                         slice::from_raw_parts(self.dt_struct.add(12), len as usize);
 
                     self.dt_struct = self.dt_struct.add(12 + len as usize);
+                    self.dt_struct = self.dt_struct.add(self.dt_struct.align_offset(4));
 
                     Some(FdtToken::Prop(name, data))
                 }
@@ -192,15 +230,12 @@ impl FdtNode {
                 _ => {
                     panic!("unknown token!");
                 }
-            };
-
-            self.dt_struct = self.dt_struct.add(self.dt_struct.align_offset(4));
-
-            token
+            }
         }
     }
 }
 
+#[derive(Debug)]
 enum FdtNodeChild {
     Node(FdtNode),
     Prop(&'static CStr, &'static [u8]),

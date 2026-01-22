@@ -6,7 +6,10 @@ mod arch;
 use core::panic::PanicInfo;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    let message = info.message();
+    println!("panic: {message:?}");
+
     loop {}
 }
 
