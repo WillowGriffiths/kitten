@@ -6,7 +6,7 @@
 .set PTE_X, (1L << 3) // executable
 .set PTE_U, (1L << 4) // user can access
 
-// fn _start(hart_id: u64, fdt_addr: u64) -> !
+// fn _start(hart_id: u64, fdt_addr: *const u8) -> !
 .global _start
 .type _start, @function
 _start:

@@ -1,94 +1,124 @@
-use core::ffi::CStr;
+use core::{ffi::CStr, slice};
 
-use crate::arch::{print, println};
+use crate::arch::println;
 
-pub fn parse(fdt: *const u32) {
-    unsafe {
-        let magic = u32::from_be(*fdt);
-        if magic != 0xd00dfeed {
-            panic!("Bad magic");
+#[derive(Debug)]
+enum FdtToken {
+    NodeBegin(&'static CStr),
+    NodeEnd,
+    Prop(&'static CStr, &'static [u8]),
+}
+
+struct FdtInfo {
+    header: *const u32,
+    dt_struct: *const u8,
+    dt_strings: *const u8,
+}
+
+struct FdtIterator {
+    dt_strings: *const u8,
+    dt_struct: *const u8,
+}
+
+impl FdtInfo {
+    fn new(fdt: *const u8) -> FdtInfo {
+        unsafe {
+            let header = fdt as *const u32;
+            let magic = u32::from_be(*header);
+            if magic != 0xd00dfeed {
+                panic!("Bad magic");
+            }
+
+            let compatible_version = u32::from_be(*header.add(6));
+            if compatible_version > 17 {
+                panic!("Bad version");
+            }
+
+            let total_size = u32::from_be(*header.add(1));
+            println!("found compatible device tree, total size: {total_size}");
+
+            let dt_struct_offset = u32::from_be(*header.add(2));
+            let dt_strings_offset = u32::from_be(*header.add(3));
+
+            let dt_struct = fdt.add(dt_struct_offset as usize);
+            let dt_strings = fdt.add(dt_strings_offset as usize);
+
+            FdtInfo {
+                header,
+                dt_struct,
+                dt_strings,
+            }
         }
+    }
 
-        let compatible_version = u32::from_be(*fdt.add(6));
-        if compatible_version > 17 {
-            panic!("Bad version");
+    fn iter(&self) -> FdtIterator {
+        FdtIterator {
+            dt_strings: self.dt_strings,
+            dt_struct: self.dt_struct,
         }
+    }
+}
 
-        let total_size = u32::from_be(*fdt.add(1));
-        println!("found compatible device tree, total size: {total_size}");
+const FDT_BEGIN_NODE: u32 = 0x01;
+const FDT_END_NODE: u32 = 0x02;
+const FDT_PROP: u32 = 0x03;
+const FDT_NOP: u32 = 0x04;
+const FDT_END: u32 = 0x09;
 
-        let addr = fdt as *const u8;
-        let dt_struct_offset = u32::from_be(*fdt.add(2));
-        let dt_strings_offset = u32::from_be(*fdt.add(3));
-        let mem_rsvmap_offset = u32::from_be(*fdt.add(4));
+impl Iterator for FdtIterator {
+    type Item = FdtToken;
 
-        let mem_rsvmap = addr.add(mem_rsvmap_offset as usize) as *const u64;
-        let mut i = 0;
-        loop {
-            let address = u64::from_be(*mem_rsvmap.add(2 * i));
-            let size = u64::from_be(*mem_rsvmap.add(2 * i + 1));
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            let mut token = u32::from_be(*(self.dt_struct as *const u32));
 
-            if (address, size) == (0, 0) {
-                break;
+            while token == FDT_NOP {
+                self.dt_struct = self.dt_struct.add(4);
+                token = u32::from_be(*(self.dt_struct as *const u32));
             }
 
-            println!("Reserved memory: {address}, {size}");
+            let token = match token {
+                FDT_BEGIN_NODE => {
+                    let name: &'static CStr = CStr::from_ptr(self.dt_struct.add(4));
+                    let bytes = name.count_bytes();
+                    self.dt_struct = self.dt_struct.add(4 + bytes + 1);
 
-            i += 1;
-        }
-
-        println!("found {i} reserved memory sections");
-
-        let mut dt_struct = addr.add(dt_struct_offset as usize);
-        let dt_strings = addr.add(dt_strings_offset as usize);
-
-        let mut depth = 0;
-        loop {
-            let token = u32::from_be(*(dt_struct as *const u32));
-            dt_struct = dt_struct.add(4);
-
-            if token == 0x02 {
-                depth -= 1;
-            }
-            if token != 0x04 {
-                for _ in 0..depth * 2 {
-                    print!(" ");
+                    Some(FdtToken::NodeBegin(name))
                 }
-            }
-            if token == 0x01 {
-                depth += 1;
-            }
+                FDT_END_NODE => {
+                    self.dt_struct = self.dt_struct.add(4);
 
-            match token {
-                0x01 => {
-                    let str = CStr::from_ptr(dt_struct);
-                    let bytes = str.count_bytes();
-                    println!("node {str:?} {{");
-                    dt_struct = dt_struct.add(bytes + 1);
+                    Some(FdtToken::NodeEnd)
                 }
-                0x02 => {
-                    println!("}}");
-                }
-                0x03 => {
-                    let len = u32::from_be(*(dt_struct as *const u32));
-                    let name_off = u32::from_be(*(dt_struct.add(4) as *const u32));
-                    let name = CStr::from_ptr(dt_strings.add(name_off as usize));
+                FDT_PROP => {
+                    let len = u32::from_be(*(self.dt_struct.add(4) as *const u32));
+                    let name_off = u32::from_be(*(self.dt_struct.add(8) as *const u32));
+                    let name: &'static CStr =
+                        CStr::from_ptr(self.dt_strings.add(name_off as usize));
+                    let data: &'static [u8] =
+                        slice::from_raw_parts(self.dt_struct.add(12), len as usize);
 
-                    println!("prop {name:?}, {len}B");
+                    self.dt_struct = self.dt_struct.add(12 + len as usize);
 
-                    dt_struct = dt_struct.add(8 + len as usize);
+                    Some(FdtToken::Prop(name, data))
                 }
-                0x04 => {}
-                0x09 => {
-                    println!("end of dt!");
-                    break;
-                }
+                FDT_END => None,
                 _ => {
-                    println!("unknown token!");
+                    panic!("unknown token!");
                 }
-            }
+            };
 
-            dt_struct = dt_struct.add(dt_struct.align_offset(4));
+            self.dt_struct = self.dt_struct.add(self.dt_struct.align_offset(4));
+
+            token
         }
+    }
+}
+
+pub fn parse(fdt: *const u8) {
+    let info = FdtInfo::new(fdt);
+
+    for token in info.iter() {
+        println!("{token:?}");
     }
 }
