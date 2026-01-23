@@ -1,4 +1,4 @@
-use core::{arch::asm, ffi::CStr, marker::PhantomData, slice};
+use core::{ffi::CStr, slice};
 
 use crate::arch::println;
 
@@ -10,69 +10,15 @@ enum FdtToken {
 }
 
 pub struct FdtInfo {
-    header: *const u32,
     dt_struct: *const u8,
     dt_strings: *const u8,
 }
 
 #[derive(Debug)]
-struct FdtNode {
-    name: &'static CStr,
+pub struct FdtNode {
+    pub name: &'static CStr,
     dt_strings: *const u8,
     dt_struct: *const u8,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Physical;
-#[derive(Clone, Copy, Debug)]
-pub struct KernelMapping;
-
-pub trait MemoryRangeType {}
-impl MemoryRangeType for Physical {}
-impl MemoryRangeType for KernelMapping {}
-
-#[derive(Clone, Copy, Debug)]
-pub struct MemoryRange<T>
-where
-    T: MemoryRangeType,
-{
-    pub start: u64,
-    pub len: u64,
-
-    phantom: PhantomData<T>,
-}
-
-impl<T> MemoryRange<T>
-where
-    T: MemoryRangeType,
-{
-    fn new(start: u64, len: u64) -> MemoryRange<T> {
-        MemoryRange {
-            start,
-            len,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl From<MemoryRange<KernelMapping>> for MemoryRange<Physical> {
-    fn from(val: MemoryRange<KernelMapping>) -> Self {
-        MemoryRange::new(val.start + 0x80000000 - 0xffffffff80000000, val.len)
-    }
-}
-
-impl From<MemoryRange<Physical>> for MemoryRange<KernelMapping> {
-    fn from(val: MemoryRange<Physical>) -> Self {
-        MemoryRange::new(val.start - 0x80000000 + 0xffffffff80000000, val.len)
-    }
-}
-
-#[derive(Debug)]
-pub struct BootInfo {
-    pub memory: MemoryRange<Physical>,
-    pub kernel_memory: MemoryRange<Physical>,
-    pub resv: Option<(usize, [MemoryRange<Physical>; 16])>,
-    pub cpus: usize,
 }
 
 impl FdtInfo {
@@ -99,112 +45,13 @@ impl FdtInfo {
             let dt_strings = fdt.add(dt_strings_offset as usize);
 
             FdtInfo {
-                header,
                 dt_struct,
                 dt_strings,
             }
         }
     }
 
-    fn parse_memory(node: &mut FdtNode) -> MemoryRange<Physical> {
-        for child in node {
-            if let FdtNodeChild::Prop(name, data) = child
-                && name == c"reg"
-            {
-                let ranges = data.len() / 16;
-                if ranges != 1 {
-                    panic!("only one memory range is supported");
-                }
-                let start = u64::from_be_bytes(data[0..8].try_into().unwrap());
-                let len = u64::from_be_bytes(data[8..16].try_into().unwrap());
-
-                return MemoryRange::new(start, len);
-            }
-        }
-
-        panic!("No range found");
-    }
-
-    fn parse_cpus(node: &mut FdtNode) -> usize {
-        let mut cpus = 0;
-        for child in node {
-            if let FdtNodeChild::Node(node) = child
-                && node.name.to_str().unwrap().starts_with("cpu@")
-            {
-                cpus += 1;
-            }
-        }
-
-        cpus
-    }
-
-    fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange<Physical>; 16]) {
-        let mut resv = [MemoryRange::new(0, 0); 16];
-        let mut resv_count = 0;
-
-        for child in node {
-            if let FdtNodeChild::Node(node) = child {
-                let name = node.name;
-                for child in node {
-                    if let FdtNodeChild::Prop(name, data) = child
-                        && name == c"reg"
-                    {
-                        let ranges = data.len() / 16;
-                        for i in 0..ranges {
-                            let start_index = 16 * i;
-                            let start = u64::from_be_bytes(
-                                data[start_index..start_index + 8].try_into().unwrap(),
-                            );
-                            let len = u64::from_be_bytes(
-                                data[start_index + 8..start_index + 16].try_into().unwrap(),
-                            );
-
-                            resv[resv_count] = MemoryRange::new(start, len);
-                            resv_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        (resv_count, resv)
-    }
-
-    pub fn boot_info(&self, kernel_start: u64, kernel_end: u64) -> BootInfo {
-        let mut memory: Option<MemoryRange<Physical>> = None;
-        let mut resv = None;
-        let mut cpus = 0;
-
-        for child in self.root_node() {
-            if let FdtNodeChild::Node(mut node) = child {
-                let name = node.name.to_str().unwrap();
-                if name.starts_with("memory") {
-                    if memory.is_some() {
-                        panic!("only one memory range is supported");
-                    }
-
-                    memory = Some(Self::parse_memory(&mut node));
-                } else if name == "reserved-memory" {
-                    if memory.is_some() {
-                        panic!("multiple reserved-memory nodes");
-                    }
-
-                    resv = Some(Self::parse_reserved_memory(&mut node));
-                } else if name == "cpus" {
-                    cpus = Self::parse_cpus(&mut node);
-                }
-            }
-        }
-
-        BootInfo {
-            memory: memory.expect("Found no memory"),
-            kernel_memory: MemoryRange::new(kernel_start, kernel_end - kernel_start),
-            resv,
-            cpus,
-        }
-    }
-
-    fn root_node(&self) -> FdtNode {
+    pub fn root_node(&self) -> FdtNode {
         unsafe {
             let mut ptr = self.dt_struct;
             loop {
@@ -294,7 +141,7 @@ impl FdtNode {
 }
 
 #[derive(Debug)]
-enum FdtNodeChild {
+pub enum FdtNodeChild {
     Node(FdtNode),
     Prop(&'static CStr, &'static [u8]),
 }

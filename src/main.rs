@@ -3,10 +3,11 @@
 #![feature(allocator_api)]
 
 mod arch;
+mod device_tree;
 
 use core::panic::PanicInfo;
 
-use crate::arch::device_tree::{KernelMapping, MemoryRange};
+use crate::arch::boot::{BootInfo, KernelMapping, MemoryRange};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -16,7 +17,7 @@ fn panic(info: &PanicInfo) -> ! {
     loop {}
 }
 
-pub fn main(boot_info: arch::device_tree::BootInfo) -> ! {
+pub fn main(boot_info: BootInfo) -> ! {
     arch::println!("Hello world! :)");
     arch::println!("{:#x?}", boot_info);
 
