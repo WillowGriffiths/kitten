@@ -4,6 +4,7 @@
 
 mod arch;
 mod device_tree;
+mod memory;
 
 use core::panic::PanicInfo;
 

@@ -19,7 +19,6 @@ _start:
     mv a1, s1
 
     la a2, __kernel_start
-    la a3, __kernel_end
 
     lui sp, %hi(__stack_top)
     addi sp, sp, %lo(__stack_top)

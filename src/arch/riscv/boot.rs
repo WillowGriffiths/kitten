@@ -1,41 +1,29 @@
 use crate::arch::println;
 use crate::arch::riscv::pagetable;
 use crate::device_tree::{FdtInfo, FdtNode, FdtNodeChild};
+use crate::memory::{self, MemoryInfo, MemoryMapping, MemoryRange};
 use core::arch::global_asm;
 
 global_asm!(include_str!("entry.s"));
 
 #[unsafe(no_mangle)]
-extern "C" fn rust_entry(hart_id: u64, fdt: *const u8, kernel_start: u64, kernel_end: u64) -> ! {
+extern "C" fn rust_entry(hart_id: u64, fdt: *const u8, kernel_start: u64) -> ! {
     println!("We are running on hart {hart_id}");
     let fdt = unsafe { fdt.sub(0x80000000).add(0xffffffff80000000) };
 
     let fdt_info = FdtInfo::new(fdt);
-    let boot_info = boot_info(&fdt_info, kernel_start, kernel_end);
+    let boot_info = boot_info(&fdt_info, kernel_start);
 
-    pagetable::setup(&boot_info);
+    memory::set_memory_info(boot_info.memory_info);
+
+    pagetable::setup(&boot_info.memory_info);
 
     crate::main(boot_info);
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct MemoryRange {
-    pub start: u64,
-    pub len: u64,
-}
-
-impl MemoryRange {
-    pub fn new(start: u64, len: u64) -> Self {
-        Self { start, len }
-    }
-}
-
 #[derive(Debug)]
 pub struct BootInfo {
-    pub memory: MemoryRange,
-    pub memory_virtual: MemoryRange,
-    pub kernel_memory: MemoryRange,
-    pub kernel_virtual: MemoryRange,
+    pub memory_info: MemoryInfo,
     pub resv: Option<(usize, [MemoryRange; 16])>,
     pub cpus: usize,
 }
@@ -110,7 +98,7 @@ unsafe extern "C" {
     static KERNEL_END: u8;
 }
 
-fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo {
+fn boot_info(fdt_info: &FdtInfo, kernel_start: u64) -> BootInfo {
     let mut memory: Option<MemoryRange> = None;
     let mut resv = None;
     let mut cpus = 0;
@@ -135,21 +123,31 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo
         }
     }
 
-    let kernel_virtual = unsafe {
+    let kernel_mapping = unsafe {
         let kernel_start_addr = (&KERNEL_START as *const u8) as u64;
         let kernel_end_addr = (&KERNEL_END as *const u8) as u64;
         let kernel_size = kernel_end_addr - kernel_start_addr;
 
-        MemoryRange::new(kernel_start_addr, kernel_size)
+        MemoryMapping {
+            phys: kernel_start,
+            virt: kernel_start_addr,
+            len: kernel_size,
+        }
     };
 
-    let memory_virtual = MemoryRange::new(0xffffffde80000000, 0x2180000000);
+    let memory = memory.expect("Found no memory");
+
+    let memory_mapping = MemoryMapping {
+        phys: memory.start,
+        virt: 0xffffffde80000000,
+        len: memory.len,
+    };
 
     BootInfo {
-        memory: memory.expect("Found no memory"),
-        memory_virtual,
-        kernel_memory: MemoryRange::new(kernel_start, kernel_end - kernel_start),
-        kernel_virtual,
+        memory_info: MemoryInfo {
+            memory: memory_mapping,
+            kernel: kernel_mapping,
+        },
         resv,
         cpus,
     }
