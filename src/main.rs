@@ -6,7 +6,7 @@ mod arch;
 
 use core::panic::PanicInfo;
 
-use crate::arch::{MemoryRange, Virtual};
+use crate::arch::device_tree::{KernelMapping, MemoryRange};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -16,11 +16,11 @@ fn panic(info: &PanicInfo) -> ! {
     loop {}
 }
 
-pub fn main(boot_info: arch::BootInfo) -> ! {
+pub fn main(boot_info: arch::device_tree::BootInfo) -> ! {
     arch::println!("Hello world! :)");
     arch::println!("{:#x?}", boot_info);
 
-    let kernel_virtual: MemoryRange<Virtual> = boot_info.kernel_memory.into();
+    let kernel_virtual: MemoryRange<KernelMapping> = boot_info.kernel_memory.into();
 
     arch::println!("{:#x?}", kernel_virtual);
 

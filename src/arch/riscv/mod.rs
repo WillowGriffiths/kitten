@@ -1,10 +1,9 @@
 use core::arch::asm;
 
-mod boot;
-mod device_tree;
-mod sbi;
+pub mod boot;
+pub mod device_tree;
 
-pub use device_tree::{BootInfo, MemoryRange, MemoryRangeType, Physical, Virtual};
+mod sbi;
 pub use sbi::print_str;
 
 pub fn wfi() {
