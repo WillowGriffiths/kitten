@@ -18,8 +18,7 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 pub fn main(boot_info: BootInfo) -> ! {
-    arch::println!("Hello world! :)");
-    arch::println!("{:#x?}", boot_info);
+    println!("Hello world! :)");
 
     loop {
         arch::wfi();

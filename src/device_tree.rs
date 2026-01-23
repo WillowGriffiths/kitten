@@ -1,7 +1,5 @@
 use core::{ffi::CStr, slice};
 
-use crate::arch::println;
-
 #[derive(Debug)]
 enum FdtToken {
     NodeBegin(FdtNode),
@@ -34,9 +32,6 @@ impl FdtInfo {
             if compatible_version > 17 {
                 panic!("Bad version");
             }
-
-            let total_size = u32::from_be(*header.add(1));
-            println!("found compatible device tree, total size: {total_size}");
 
             let dt_struct_offset = u32::from_be(*header.add(2));
             let dt_strings_offset = u32::from_be(*header.add(3));
