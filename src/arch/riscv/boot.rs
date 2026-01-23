@@ -76,7 +76,7 @@ pub struct BootInfo {
 fn parse_memory(node: &mut FdtNode) -> MemoryRange<Physical> {
     for child in node {
         if let FdtNodeChild::Prop(name, data) = child
-            && name == c"reg"
+            && name == "reg"
         {
             let ranges = data.len() / 16;
             if ranges != 1 {
@@ -96,7 +96,7 @@ fn parse_cpus(node: &mut FdtNode) -> usize {
     let mut cpus = 0;
     for child in node {
         if let FdtNodeChild::Node(node) = child
-            && node.name.to_str().unwrap().starts_with("cpu@")
+            && node.name.starts_with("cpu@")
         {
             cpus += 1;
         }
@@ -113,7 +113,7 @@ fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange<Physical>; 
         if let FdtNodeChild::Node(node) = child {
             for child in node {
                 if let FdtNodeChild::Prop(name, data) = child
-                    && name == c"reg"
+                    && name == "reg"
                 {
                     let ranges = data.len() / 16;
                     for i in 0..ranges {
@@ -143,20 +143,19 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo
 
     for child in fdt_info.root_node() {
         if let FdtNodeChild::Node(mut node) = child {
-            let name = node.name.to_str().unwrap();
-            if name.starts_with("memory") {
+            if node.name.starts_with("memory") {
                 if memory.is_some() {
                     panic!("only one memory range is supported");
                 }
 
                 memory = Some(parse_memory(&mut node));
-            } else if name == "reserved-memory" {
+            } else if node.name == "reserved-memory" {
                 if memory.is_some() {
                     panic!("multiple reserved-memory nodes");
                 }
 
                 resv = Some(parse_reserved_memory(&mut node));
-            } else if name == "cpus" {
+            } else if node.name == "cpus" {
                 cpus = parse_cpus(&mut node);
             }
         }

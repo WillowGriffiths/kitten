@@ -6,7 +6,7 @@ use crate::arch::println;
 enum FdtToken {
     NodeBegin(FdtNode),
     NodeEnd,
-    Prop(&'static CStr, &'static [u8]),
+    Prop(&'static str, &'static [u8]),
 }
 
 pub struct FdtInfo {
@@ -16,7 +16,7 @@ pub struct FdtInfo {
 
 #[derive(Debug)]
 pub struct FdtNode {
-    pub name: &'static CStr,
+    pub name: &'static str,
     dt_strings: *const u8,
     dt_struct: *const u8,
 }
@@ -59,8 +59,9 @@ impl FdtInfo {
                 match token {
                     FDT_NOP => {}
                     FDT_BEGIN_NODE => {
-                        let name: &'static CStr = CStr::from_ptr(ptr.add(4));
-                        let bytes = name.count_bytes();
+                        let name_c: &'static CStr = CStr::from_ptr(ptr.add(4));
+                        let name = name_c.to_str().expect("invalid node name");
+                        let bytes = name.len();
 
                         ptr = ptr.add(4 + bytes + 1);
                         ptr = ptr.add(ptr.align_offset(4));
@@ -100,8 +101,9 @@ impl FdtNode {
 
             match token {
                 FDT_BEGIN_NODE => {
-                    let name: &'static CStr = CStr::from_ptr(self.dt_struct.add(4));
-                    let bytes = name.count_bytes();
+                    let name_c: &'static CStr = CStr::from_ptr(self.dt_struct.add(4));
+                    let name = name_c.to_str().expect("invalid node name");
+                    let bytes = name.len();
                     self.dt_struct = self.dt_struct.add(4 + bytes + 1);
                     self.dt_struct = self.dt_struct.add(self.dt_struct.align_offset(4));
 
@@ -121,8 +123,9 @@ impl FdtNode {
                 FDT_PROP => {
                     let len = u32::from_be(*(self.dt_struct.add(4) as *const u32));
                     let name_off = u32::from_be(*(self.dt_struct.add(8) as *const u32));
-                    let name: &'static CStr =
+                    let name_c: &'static CStr =
                         CStr::from_ptr(self.dt_strings.add(name_off as usize));
+                    let name = name_c.to_str().expect("Invalid property name");
                     let data: &'static [u8] =
                         slice::from_raw_parts(self.dt_struct.add(12), len as usize);
 
@@ -143,7 +146,7 @@ impl FdtNode {
 #[derive(Debug)]
 pub enum FdtNodeChild {
     Node(FdtNode),
-    Prop(&'static CStr, &'static [u8]),
+    Prop(&'static str, &'static [u8]),
 }
 
 impl Iterator for FdtNode {
