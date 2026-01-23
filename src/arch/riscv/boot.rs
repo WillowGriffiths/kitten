@@ -105,7 +105,7 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64) -> BootInfo {
 
     for child in fdt_info.root_node() {
         if let FdtNodeChild::Node(mut node) = child {
-            if node.name.starts_with("memory") {
+            if node.name.starts_with("memory@") {
                 if memory.is_some() {
                     panic!("only one memory range is supported");
                 }
