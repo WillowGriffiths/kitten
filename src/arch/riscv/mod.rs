@@ -4,7 +4,7 @@ mod boot;
 mod device_tree;
 mod sbi;
 
-pub use device_tree::BootInfo;
+pub use device_tree::{BootInfo, MemoryRange, MemoryRangeType, Physical, Virtual};
 pub use sbi::print_str;
 
 pub fn wfi() {
