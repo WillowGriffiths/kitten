@@ -1,4 +1,4 @@
-use core::{ffi::CStr, slice};
+use core::{arch::asm, ffi::CStr, slice};
 
 use crate::arch::println;
 
@@ -31,6 +31,7 @@ pub struct MemoryRange {
 #[derive(Debug)]
 pub struct BootInfo {
     pub memory: MemoryRange,
+    pub kernel_memory: MemoryRange,
     pub resv: Option<(usize, [MemoryRange; 16])>,
     pub cpus: usize,
 }
@@ -130,7 +131,7 @@ impl FdtInfo {
         (resv_count, resv)
     }
 
-    pub fn boot_info(&self) -> BootInfo {
+    pub fn boot_info(&self, kernel_start: u64, kernel_end: u64) -> BootInfo {
         let mut memory: Option<MemoryRange> = None;
         let mut resv = None;
         let mut cpus = 0;
@@ -158,6 +159,10 @@ impl FdtInfo {
 
         BootInfo {
             memory: memory.expect("Found no memory"),
+            kernel_memory: MemoryRange {
+                start: kernel_start,
+                len: kernel_end - kernel_start,
+            },
             resv,
             cpus,
         }

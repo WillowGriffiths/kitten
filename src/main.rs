@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-
+#[feature(allocator_api)]
 mod arch;
 
 use core::panic::PanicInfo;
@@ -13,8 +13,9 @@ fn panic(info: &PanicInfo) -> ! {
     loop {}
 }
 
-pub fn main() -> ! {
+pub fn main(boot_info: arch::BootInfo) -> ! {
     arch::println!("Hello world! :)");
+    arch::println!("{:#x?}", boot_info);
 
     loop {
         arch::wfi();
