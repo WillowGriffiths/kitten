@@ -24,60 +24,28 @@ extern "C" fn rust_entry(hart_id: u64, fdt: *const u8, kernel_start: u64, kernel
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Physical;
-#[derive(Clone, Copy, Debug)]
-pub struct KernelMapping;
-
-pub trait MemoryRangeType {}
-impl MemoryRangeType for Physical {}
-impl MemoryRangeType for KernelMapping {}
-
-#[derive(Clone, Copy, Debug)]
-pub struct MemoryRange<T>
-where
-    T: MemoryRangeType,
-{
+pub struct MemoryRange {
     pub start: u64,
     pub len: u64,
-
-    phantom: PhantomData<T>,
 }
 
-impl<T> MemoryRange<T>
-where
-    T: MemoryRangeType,
-{
-    fn new(start: u64, len: u64) -> MemoryRange<T> {
-        MemoryRange {
-            start,
-            len,
-            phantom: PhantomData,
-        }
-    }
-}
-
-impl From<MemoryRange<KernelMapping>> for MemoryRange<Physical> {
-    fn from(val: MemoryRange<KernelMapping>) -> Self {
-        MemoryRange::new(val.start + 0x80000000 - 0xffffffff80000000, val.len)
-    }
-}
-
-impl From<MemoryRange<Physical>> for MemoryRange<KernelMapping> {
-    fn from(val: MemoryRange<Physical>) -> Self {
-        MemoryRange::new(val.start - 0x80000000 + 0xffffffff80000000, val.len)
+impl MemoryRange {
+    pub fn new(start: u64, len: u64) -> Self {
+        Self { start, len }
     }
 }
 
 #[derive(Debug)]
 pub struct BootInfo {
-    pub memory: MemoryRange<Physical>,
-    pub kernel_memory: MemoryRange<Physical>,
-    pub kernel_virtual: MemoryRange<KernelMapping>,
-    pub resv: Option<(usize, [MemoryRange<Physical>; 16])>,
+    pub memory: MemoryRange,
+    pub memory_virtual: MemoryRange,
+    pub kernel_memory: MemoryRange,
+    pub kernel_virtual: MemoryRange,
+    pub resv: Option<(usize, [MemoryRange; 16])>,
     pub cpus: usize,
 }
 
-fn parse_memory(node: &mut FdtNode) -> MemoryRange<Physical> {
+fn parse_memory(node: &mut FdtNode) -> MemoryRange {
     for child in node {
         if let FdtNodeChild::Prop(name, data) = child
             && name == "reg"
@@ -109,7 +77,7 @@ fn parse_cpus(node: &mut FdtNode) -> usize {
     cpus
 }
 
-fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange<Physical>; 16]) {
+fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange; 16]) {
     let mut resv = [MemoryRange::new(0, 0); 16];
     let mut resv_count = 0;
 
@@ -148,7 +116,7 @@ unsafe extern "C" {
 }
 
 fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo {
-    let mut memory: Option<MemoryRange<Physical>> = None;
+    let mut memory: Option<MemoryRange> = None;
     let mut resv = None;
     let mut cpus = 0;
 
@@ -180,8 +148,11 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo
         MemoryRange::new(kernel_start_addr, kernel_size)
     };
 
+    let memory_virtual = MemoryRange::new(0xffffffde80000000, 0x2180000000);
+
     BootInfo {
         memory: memory.expect("Found no memory"),
+        memory_virtual,
         kernel_memory: MemoryRange::new(kernel_start, kernel_end - kernel_start),
         kernel_virtual,
         resv,

@@ -33,12 +33,24 @@ fn set_pagetable(pagetable: *const PageTable) {
 }
 
 pub(super) fn setup(boot_info: &BootInfo) {
-    let kernel_page_l2 = (boot_info.kernel_virtual.start >> 30) & 0x1ff;
-    let kernel_physical = boot_info.kernel_memory.start >> 30 << 30;
-
     unsafe {
+        let kernel_page_l2 = (boot_info.kernel_virtual.start >> 30) & 0x1ff;
+        let kernel_physical = boot_info.kernel_memory.start >> 30 << 30;
+
+        // TODO: map kernel with more granularity of permission bits
         ROOT_PAGETABLE.0[kernel_page_l2 as usize] =
             make_pte(kernel_physical, PTE_V | PTE_R | PTE_W | PTE_X);
+
+        let mut mapping_len = 0;
+        while mapping_len < boot_info.memory.len {
+            let page_physical = boot_info.memory.start + mapping_len;
+            let page_virtual = boot_info.memory_virtual.start + mapping_len;
+            let l2 = (page_virtual >> 30) & 0x1ff;
+
+            ROOT_PAGETABLE.0[l2 as usize] = make_pte(page_physical, PTE_V | PTE_R | PTE_W | PTE_X);
+
+            mapping_len += 512 * 512 * 4096;
+        }
 
         set_pagetable(&raw const ROOT_PAGETABLE);
     }
