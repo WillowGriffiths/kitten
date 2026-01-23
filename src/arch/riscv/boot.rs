@@ -1,4 +1,5 @@
 use crate::arch::println;
+use crate::arch::riscv::pagetable;
 use crate::device_tree::{FdtInfo, FdtNode, FdtNodeChild};
 use core::{arch::global_asm, marker::PhantomData};
 
@@ -16,6 +17,8 @@ extern "C" fn rust_entry(hart_id: u64, fdt: *const u8, kernel_start: u64, kernel
         "found {} harts, {}B of memory",
         boot_info.cpus, boot_info.memory.len
     );
+
+    pagetable::setup(&boot_info);
 
     crate::main(boot_info);
 }
@@ -69,6 +72,7 @@ impl From<MemoryRange<Physical>> for MemoryRange<KernelMapping> {
 pub struct BootInfo {
     pub memory: MemoryRange<Physical>,
     pub kernel_memory: MemoryRange<Physical>,
+    pub kernel_virtual: MemoryRange<KernelMapping>,
     pub resv: Option<(usize, [MemoryRange<Physical>; 16])>,
     pub cpus: usize,
 }
@@ -136,6 +140,13 @@ fn parse_reserved_memory(node: &mut FdtNode) -> (usize, [MemoryRange<Physical>; 
     (resv_count, resv)
 }
 
+unsafe extern "C" {
+    #[link_name = "__virtual_kernel_start"]
+    static KERNEL_START: u8;
+    #[link_name = "__virtual_end"]
+    static KERNEL_END: u8;
+}
+
 fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo {
     let mut memory: Option<MemoryRange<Physical>> = None;
     let mut resv = None;
@@ -161,9 +172,18 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, kernel_end: u64) -> BootInfo
         }
     }
 
+    let kernel_virtual = unsafe {
+        let kernel_start_addr = (&KERNEL_START as *const u8) as u64;
+        let kernel_end_addr = (&KERNEL_END as *const u8) as u64;
+        let kernel_size = kernel_end_addr - kernel_start_addr;
+
+        MemoryRange::new(kernel_start_addr, kernel_size)
+    };
+
     BootInfo {
         memory: memory.expect("Found no memory"),
         kernel_memory: MemoryRange::new(kernel_start, kernel_end - kernel_start),
+        kernel_virtual,
         resv,
         cpus,
     }
