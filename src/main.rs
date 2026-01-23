@@ -15,7 +15,9 @@ fn panic(info: &PanicInfo) -> ! {
     let message = info.message();
     println!("panic: {message:?}");
 
-    loop {}
+    loop {
+        arch::wfi();
+    }
 }
 
 pub fn main(boot_info: BootInfo) -> ! {
