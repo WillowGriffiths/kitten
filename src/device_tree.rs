@@ -1,5 +1,7 @@
 use core::{ffi::CStr, slice};
 
+use crate::memory::MemoryRange;
+
 #[derive(Debug)]
 enum FdtToken {
     NodeBegin(FdtNode),
@@ -7,7 +9,22 @@ enum FdtToken {
     Prop(&'static str, &'static [u8]),
 }
 
+#[repr(C)]
+struct FdtHeader {
+    magic: u32,
+    total_size: u32,
+    dt_struct_offset: u32,
+    dt_strings_offset: u32,
+    mem_rsvmap_offset: u32,
+    version: u32,
+    compatible_version: u32,
+    boot_cpuid_phys: u32,
+    dt_strings_size: u32,
+    dt_struct_size: u32,
+}
+
 pub struct FdtInfo {
+    header: &'static FdtHeader,
     dt_struct: *const u8,
     dt_strings: *const u8,
 }
@@ -22,27 +39,38 @@ pub struct FdtNode {
 impl FdtInfo {
     pub fn new(fdt: *const u8) -> FdtInfo {
         unsafe {
-            let header = fdt as *const u32;
-            let magic = u32::from_be(*header);
+            let header = (fdt as *const FdtHeader).as_ref().unwrap();
+            let magic = u32::from_be(header.magic);
             if magic != 0xd00dfeed {
                 panic!("Bad magic");
             }
 
-            let compatible_version = u32::from_be(*header.add(6));
+            let compatible_version = u32::from_be(header.compatible_version);
             if compatible_version > 17 {
                 panic!("Bad version");
             }
 
-            let dt_struct_offset = u32::from_be(*header.add(2));
-            let dt_strings_offset = u32::from_be(*header.add(3));
+            let dt_struct_offset = u32::from_be(header.dt_struct_offset);
+            let dt_strings_offset = u32::from_be(header.dt_strings_offset);
 
             let dt_struct = fdt.add(dt_struct_offset as usize);
             let dt_strings = fdt.add(dt_strings_offset as usize);
 
             FdtInfo {
+                header,
                 dt_struct,
                 dt_strings,
             }
+        }
+    }
+
+    pub fn memory_range(&self) -> MemoryRange {
+        let size = u32::from_be(self.header.total_size) as u64;
+        let addr = self.header as *const FdtHeader as u64;
+
+        MemoryRange {
+            start: addr,
+            len: size,
         }
     }
 

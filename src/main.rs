@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(allocator_api)]
 
+mod allocator;
 mod arch;
 mod device_tree;
 mod memory;
@@ -21,6 +22,7 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 pub fn main(boot_info: BootInfo) -> ! {
+    allocator::setup(&boot_info);
     println!("Hello world! :)");
 
     loop {

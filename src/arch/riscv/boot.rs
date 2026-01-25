@@ -24,7 +24,8 @@ extern "C" fn rust_entry(hart_id: u64, fdt: *const u8, kernel_start: u64) -> ! {
 #[derive(Debug)]
 pub struct BootInfo {
     pub memory_info: MemoryInfo,
-    pub resv: Option<(usize, [MemoryRange; 16])>,
+    pub resv_count: usize,
+    pub resv: [MemoryRange; 16],
     pub cpus: usize,
 }
 
@@ -143,11 +144,30 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64) -> BootInfo {
         len: memory.len,
     };
 
+    let resv = resv.unwrap_or((0, [MemoryRange { start: 0, len: 0 }; 16]));
+
+    let resv_count = resv.0 + 1;
+    let mut resv = resv.1;
+    if resv_count > resv.len() {
+        panic!("Too many reserved sections");
+    }
+
+    let fdt_memory = fdt_info.memory_range();
+    println!("{kernel_mapping:#x?}");
+    let fdt_memory_physical = MemoryRange {
+        start: fdt_memory.start - kernel_mapping.virt + kernel_mapping.phys,
+        len: fdt_memory.len,
+    };
+    println!("{fdt_memory_physical:#x?}");
+
+    resv[resv_count - 1] = fdt_memory_physical;
+
     BootInfo {
         memory_info: MemoryInfo {
             memory: memory_mapping,
             kernel: kernel_mapping,
         },
+        resv_count,
         resv,
         cpus,
     }
