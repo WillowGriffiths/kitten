@@ -153,12 +153,10 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64) -> BootInfo {
     }
 
     let fdt_memory = fdt_info.memory_range();
-    println!("{kernel_mapping:#x?}");
     let fdt_memory_physical = MemoryRange {
         start: fdt_memory.start - kernel_mapping.virt + kernel_mapping.phys,
         len: fdt_memory.len,
     };
-    println!("{fdt_memory_physical:#x?}");
 
     resv[resv_count - 1] = fdt_memory_physical;
 
