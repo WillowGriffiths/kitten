@@ -1,3 +1,5 @@
+use crate::arch::{ResetReason, ResetType};
+
 #[allow(dead_code)]
 mod consts {
     // SBI Extension IDs (EID)
@@ -157,6 +159,29 @@ pub fn print_str(s: &str) {
         consts::FID_DBCN_CONSOLE_WRITE,
         len,
         ptr - virtual_diff,
+        0,
+        0,
+        0,
+    );
+}
+
+pub fn reset(reset_type: ResetType, reset_reason: ResetReason) {
+    let reset_type_sbi = match reset_type {
+        ResetType::Shutdown => consts::RESET_TYPE_SHUTDOWN,
+        ResetType::ColdReboot => consts::RESET_TYPE_COLD_REBOOT,
+        ResetType::WarmReboot => consts::RESET_TYPE_WARM_REBOOT,
+    };
+
+    let reset_reason_sbi = match reset_reason {
+        ResetReason::NoReason => consts::RESET_REASON_NO_REASON,
+        ResetReason::SystemFailure => consts::RESET_REASON_SYSTEM_FAILURE,
+    };
+
+    sbi_call(
+        consts::EID_SRST,
+        consts::FID_SRST_SYSTEM_RESET,
+        reset_type_sbi,
+        reset_reason_sbi,
         0,
         0,
         0,

@@ -31,3 +31,14 @@ macro_rules! println {
 }
 
 pub use {print, println};
+
+pub enum ResetType {
+    Shutdown,
+    ColdReboot,
+    WarmReboot,
+}
+
+pub enum ResetReason {
+    NoReason,
+    SystemFailure,
+}

@@ -26,6 +26,8 @@ fn panic(info: &PanicInfo) -> ! {
         println!("panic: {message:?}");
     }
 
+    arch::reset(arch::ResetType::Shutdown, arch::ResetReason::SystemFailure);
+
     loop {
         arch::wfi();
     }
