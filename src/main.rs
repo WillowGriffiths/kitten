@@ -9,12 +9,22 @@ mod memory;
 
 use core::panic::PanicInfo;
 
+use alloc::vec;
+
 use crate::arch::boot::BootInfo;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let message = info.message();
-    println!("panic: {message:?}");
+    if let Some(location) = info.location() {
+        println!(
+            "panic at {}:{}: {message:?}",
+            location.file(),
+            location.line()
+        );
+    } else {
+        println!("panic: {message:?}");
+    }
 
     loop {
         arch::wfi();
