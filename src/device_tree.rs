@@ -2,6 +2,8 @@ use core::{ffi::CStr, slice};
 
 use crate::memory::MemoryRange;
 
+// TODO: proper bounds checking
+
 #[derive(Debug)]
 enum FdtToken {
     NodeBegin(FdtNode),
