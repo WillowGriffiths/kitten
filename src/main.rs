@@ -16,6 +16,8 @@ use alloc::vec;
 
 use crate::arch::boot::BootInfo;
 
+const BOOT_MESSAGE: &str = include_str!("./boot_message.txt");
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let message = info.message();
@@ -37,6 +39,8 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 pub fn main(boot_info: BootInfo) -> ! {
+    print!("{BOOT_MESSAGE}");
+
     allocator::setup(&boot_info);
 
     let things = vec!["thing 1", "thing 2", "thing 3"];
