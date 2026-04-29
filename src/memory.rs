@@ -1,3 +1,4 @@
+
 #[derive(Clone, Copy, Debug)]
 pub struct MemoryRange {
     pub start: u64,
@@ -45,3 +46,28 @@ pub fn to_phys(value: u64) -> u64 {
         panic!("Invalid memory address");
     }
 }
+
+pub fn to_virt(value: u64) -> u64 {
+    let memory_info = unsafe { MEMORY_INFO.expect("uninitialised memory info") };
+
+    if value < memory_info.memory.phys || value >= memory_info.memory.phys + memory_info.memory.len
+    {
+        panic!("Invalid memory address");
+    }
+
+    value - memory_info.memory.phys + memory_info.memory.virt
+}
+
+pub fn ram_start() -> (u64, u64) {
+    let memory_info = unsafe { MEMORY_INFO.expect("uninitialised memory info") };
+
+    (memory_info.memory.phys, memory_info.memory.virt)
+}
+
+pub const PAGE_SIZE: usize = 4096;
+
+#[repr(C)]
+#[repr(align(4096))]
+pub struct Page(pub [u8; PAGE_SIZE]);
+
+pub const ZEROED_PAGE: Page = Page([0; PAGE_SIZE]);

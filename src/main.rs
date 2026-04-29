@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 #![feature(allocator_api)]
+#![feature(ptr_alignment_type)]
+
+extern crate alloc;
 
 mod allocator;
 mod arch;
@@ -35,7 +38,14 @@ fn panic(info: &PanicInfo) -> ! {
 
 pub fn main(boot_info: BootInfo) -> ! {
     allocator::setup(&boot_info);
-    println!("Hello world! :)");
+
+    let things = vec!["thing 1", "thing 2", "thing 3"];
+
+    println!("We just heap allocated some things: {things:?}");
+
+    println!("Expecting a panic now!");
+    // will fail; deallocation is unimplemented
+    drop(things);
 
     loop {
         arch::wfi();
