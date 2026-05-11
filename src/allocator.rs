@@ -13,6 +13,7 @@ use crate::{
 };
 
 struct BuddyAllocator {
+    // TODO: lock for thread safety
     inner: UnsafeCell<Option<BuddyInner>>,
 }
 
@@ -402,6 +403,7 @@ static BUDDY_ALLOCATOR: BuddyAllocator = BuddyAllocator {
 pub struct SlabAllocator(*mut Page);
 
 struct SlabAllocatorFirstHeader {
+    // TODO: lock for thread safety
     next_page: *mut u8,
     step: usize,
     offset: usize,
