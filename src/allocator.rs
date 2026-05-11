@@ -1,6 +1,5 @@
 use core::{
     alloc::{Allocator, GlobalAlloc, Layout},
-    cell::UnsafeCell,
     mem,
     ptr::{self, NonNull},
 };
@@ -10,11 +9,11 @@ use alloc::alloc::AllocError;
 use crate::{
     arch::boot::BootInfo,
     memory::{self, Page, ZEROED_PAGE},
+    sync::{SpinLock, SpinLockGuard},
 };
 
 struct BuddyAllocator {
-    // TODO: lock for thread safety
-    inner: UnsafeCell<Option<BuddyInner>>,
+    inner: SpinLock<Option<BuddyInner>>,
 }
 
 struct BuddyHeader(*mut Page);
@@ -41,12 +40,12 @@ impl BuddyInner {
     #[inline(always)]
     fn offset() -> usize {
         let align = Self::align();
-        mem::size_of::<BuddyNode>().next_multiple_of(align)
+        mem::size_of::<BuddyHeader>().next_multiple_of(align)
     }
 
     #[inline(always)]
     fn size() -> usize {
-        mem::size_of::<BuddyNode>().next_multiple_of(mem::size_of::<BuddyLink>())
+        mem::size_of::<BuddyNode>().max(mem::size_of::<BuddyLink>())
     }
 
     #[inline(always)]
@@ -423,50 +422,32 @@ const BUDDY_ORDER0: usize = memory::PAGE_SIZE;
 
 impl BuddyAllocator {
     fn init(&self, boot_info: &BootInfo) {
-        unsafe {
-            assert!((*self.inner.get()).is_none());
+        let mut lock = self.inner.lock();
+        assert!(lock.is_none());
 
-            let inner = BuddyInner::new(boot_info);
-            *self.inner.get() = Some(inner);
-        }
+        let inner = BuddyInner::new(boot_info);
+        *lock = Some(inner);
     }
 }
 
 unsafe impl GlobalAlloc for BuddyAllocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        unsafe {
-            self.inner
-                .get()
-                .as_mut()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .alloc(layout)
-        }
+        self.inner.lock().as_mut().unwrap().alloc(layout)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: core::alloc::Layout) {
-        unsafe {
-            self.inner
-                .get()
-                .as_mut()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .dealloc(ptr);
-        }
+        self.inner.lock().as_mut().unwrap().dealloc(ptr)
     }
 }
 
 static BUDDY_ALLOCATOR: BuddyAllocator = BuddyAllocator {
-    inner: UnsafeCell::new(None),
+    inner: SpinLock::new(None),
 };
 
 #[derive(Clone, Copy)]
 pub struct SlabAllocator(*mut Page);
 
-struct SlabAllocatorFirstHeader {
-    // TODO: lock for thread safety
+struct SlabAllocatorInner {
     next_page: *mut u8,
     step: usize,
     offset: usize,
@@ -476,6 +457,8 @@ struct SlabAllocatorFirstHeader {
 
     free_head: *mut SlabAllocatorLink,
 }
+
+struct SlabAllocatorFirstHeader(SpinLock<SlabAllocatorInner>);
 
 struct SlabAllocatorHeader {
     next_page: *mut u8,
@@ -520,7 +503,7 @@ impl SlabAllocator {
             let last_link = first_slot.byte_add(step * (available - 1));
             *last_link = SlabAllocatorLink(ptr::null_mut());
 
-            *(first_page as *mut SlabAllocatorFirstHeader) = SlabAllocatorFirstHeader {
+            let inner = SlabAllocatorInner {
                 next_page: ptr::null_mut(),
                 step,
                 offset,
@@ -530,14 +513,17 @@ impl SlabAllocator {
 
                 free_head: first_slot,
             };
+
+            *(first_page as *mut SlabAllocatorFirstHeader) =
+                SlabAllocatorFirstHeader(SpinLock::new(inner));
         }
 
         SlabAllocator(first_page)
     }
 
-    unsafe fn grow(&self, first: &mut SlabAllocatorFirstHeader) -> Option<()> {
+    unsafe fn grow(&self, lock: &mut SpinLockGuard<SlabAllocatorInner>) -> Option<()> {
         unsafe {
-            log::debug!("{}: growing!", first.name);
+            log::debug!("{}: growing!", lock.name);
 
             let new_page = BUDDY_ALLOCATOR.alloc(Layout::new::<memory::Page>());
             if new_page.is_null() {
@@ -548,30 +534,30 @@ impl SlabAllocator {
                 next_page: ptr::null_mut(),
             };
 
-            let mut cursor = &mut first.next_page;
+            let mut cursor = &mut lock.next_page;
             while !(*cursor).is_null() {
                 let ptr = (*cursor) as *mut SlabAllocatorHeader;
                 cursor = &mut (*ptr).next_page;
             }
             *cursor = new_page;
 
-            let first_slot = new_page.byte_add(first.offset) as *mut SlabAllocatorLink;
+            let first_slot = new_page.byte_add(lock.offset) as *mut SlabAllocatorLink;
 
-            let (_, available) = Self::slots_per_page(first.first_offset, first.offset, first.step);
+            let (_, available) = Self::slots_per_page(lock.first_offset, lock.offset, lock.step);
 
-            let last_link = first_slot.byte_add(first.step * (available - 1));
-            *last_link = SlabAllocatorLink(first.free_head);
+            let last_link = first_slot.byte_add(lock.step * (available - 1));
+            *last_link = SlabAllocatorLink(lock.free_head);
 
             for i in 0..available - 1 {
-                let link = first_slot.byte_add(first.step * i);
-                let next_link = first_slot.byte_add(first.step + first.step * i);
+                let link = first_slot.byte_add(lock.step * i);
+                let next_link = first_slot.byte_add(lock.step + lock.step * i);
 
                 (*link).0 = next_link;
             }
 
-            first.free_head = first_slot;
+            lock.free_head = first_slot;
 
-            first.available += available;
+            lock.available += available;
 
             Some(())
         }
@@ -584,32 +570,33 @@ unsafe impl Allocator for SlabAllocator {
         layout: Layout,
     ) -> Result<core::ptr::NonNull<[u8]>, alloc::alloc::AllocError> {
         unsafe {
-            let first = &mut *(self.0 as *mut SlabAllocatorFirstHeader);
+            let first = &*(self.0 as *mut SlabAllocatorFirstHeader);
+            let mut lock = first.0.lock();
 
-            if layout.size() > first.step || layout.align() > first.step {
-                log::error!("{}: bad allocation layout", first.name);
-
-                return Err(AllocError);
-            }
-
-            if first.available < REALLOCATE_THRESHOLD && self.grow(first).is_none() {
-                log::error!("{}: failed to grow slab", first.name);
+            if layout.size() > lock.step || layout.align() > lock.step {
+                log::error!("{}: bad allocation layout", lock.name);
 
                 return Err(AllocError);
             }
 
-            if first.available == 0 {
-                log::error!("{}: slab out of capacity", first.name);
+            if lock.available < REALLOCATE_THRESHOLD && self.grow(&mut lock).is_none() {
+                log::error!("{}: failed to grow slab", lock.name);
 
                 return Err(AllocError);
             }
 
-            let allocation_ptr = NonNull::new(first.free_head as *mut u8).unwrap();
+            if lock.available == 0 {
+                log::error!("{}: slab out of capacity", lock.name);
 
-            let next_free = (*first.free_head).0;
-            first.free_head = next_free;
+                return Err(AllocError);
+            }
 
-            first.available -= 1;
+            let allocation_ptr = NonNull::new(lock.free_head as *mut u8).unwrap();
+
+            let next_free = (*lock.free_head).0;
+            lock.free_head = next_free;
+
+            lock.available -= 1;
             let allocation = NonNull::slice_from_raw_parts(allocation_ptr, layout.size());
 
             Ok(allocation)
@@ -618,13 +605,14 @@ unsafe impl Allocator for SlabAllocator {
 
     unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, _layout: Layout) {
         unsafe {
-            let first = &mut *(self.0 as *mut SlabAllocatorFirstHeader);
+            let first = &*(self.0 as *mut SlabAllocatorFirstHeader);
+            let mut lock = first.0.lock();
 
             let link = ptr.as_ptr() as *mut SlabAllocatorLink;
-            *link = SlabAllocatorLink(first.free_head);
+            *link = SlabAllocatorLink(lock.free_head);
 
-            first.free_head = link;
-            first.available += 1;
+            lock.free_head = link;
+            lock.available += 1;
         }
     }
 }
@@ -716,45 +704,27 @@ impl AutoAllocatorInner {
 }
 
 struct AutoAllocator {
-    // TODO: lock for thread safety
-    inner: UnsafeCell<Option<AutoAllocatorInner>>,
+    inner: SpinLock<Option<AutoAllocatorInner>>,
 }
 
 impl AutoAllocator {
     fn init(&self) {
-        unsafe {
-            assert!((*self.inner.get()).is_none());
+        let mut lock = self.inner.lock();
+        assert!(lock.is_none());
 
-            let inner = AutoAllocatorInner::new();
+        let inner = AutoAllocatorInner::new();
 
-            *self.inner.get() = Some(inner);
-        }
+        *lock = Some(inner);
     }
 }
 
 unsafe impl GlobalAlloc for AutoAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe {
-            self.inner
-                .get()
-                .as_mut()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .alloc(layout)
-        }
+        self.inner.lock().as_mut().unwrap().alloc(layout)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe {
-            self.inner
-                .get()
-                .as_mut()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .dealloc(ptr, layout)
-        }
+        self.inner.lock().as_mut().unwrap().dealloc(ptr, layout)
     }
 }
 
@@ -762,7 +732,7 @@ unsafe impl Sync for AutoAllocator {}
 
 #[global_allocator]
 static AUTO_ALLOCATOR: AutoAllocator = AutoAllocator {
-    inner: UnsafeCell::new(None),
+    inner: SpinLock::new(None),
 };
 
 pub fn setup(boot_info: &BootInfo) {
