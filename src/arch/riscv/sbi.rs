@@ -1,4 +1,7 @@
-use crate::arch::{ResetReason, ResetType};
+use crate::{
+    arch::{ResetReason, ResetType},
+    memory,
+};
 
 #[allow(dead_code)]
 mod consts {
@@ -148,17 +151,16 @@ fn sbi_call(
 }
 
 pub fn print_str(s: &str) {
-    let virtual_diff: usize = 0xffffffff80000000 - 0x80000000;
-
     let bytes = s.as_bytes();
     let ptr = bytes.as_ptr() as usize;
+    let phys = memory::to_phys(ptr as u64) as usize;
     let len = bytes.len();
 
     sbi_call(
         consts::EID_DBCN,
         consts::FID_DBCN_CONSOLE_WRITE,
         len,
-        ptr - virtual_diff,
+        phys,
         0,
         0,
         0,
