@@ -1,6 +1,7 @@
 use crate::{
     arch::{ResetReason, ResetType},
     memory,
+    sync::SpinLock,
 };
 
 #[allow(dead_code)]
@@ -150,7 +151,11 @@ fn sbi_call(
     (error, value)
 }
 
+static PRINT_LOCK: SpinLock<()> = SpinLock::new(());
+
 pub fn print_str(s: &str) {
+    let _lock = PRINT_LOCK.lock();
+
     let bytes = s.as_bytes();
     let ptr = bytes.as_ptr() as usize;
     let phys = memory::to_phys(ptr as u64) as usize;
