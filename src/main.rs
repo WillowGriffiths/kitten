@@ -76,7 +76,7 @@ pub fn main(boot_info: BootInfo) -> ! {
     print!("{BOOT_MESSAGE}");
 
     log::set_logger(&LOGGER)
-        .map(|()| log::set_max_level(log::LevelFilter::Debug))
+        .map(|()| log::set_max_level(log::LevelFilter::Info))
         .unwrap();
 
     allocator::setup(&boot_info);
