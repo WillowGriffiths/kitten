@@ -9,6 +9,7 @@ mod allocator;
 mod arch;
 mod device_tree;
 mod memory;
+mod sync;
 
 use core::panic::PanicInfo;
 
