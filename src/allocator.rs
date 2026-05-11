@@ -513,12 +513,13 @@ impl SlabAllocator {
             Some(())
         }
     }
+}
 
-    fn allocate_should_recurse(
+unsafe impl Allocator for SlabAllocator {
+    fn allocate(
         &self,
         layout: Layout,
-        recurse: bool,
-    ) -> Result<NonNull<[u8]>, AllocError> {
+    ) -> Result<core::ptr::NonNull<[u8]>, alloc::alloc::AllocError> {
         unsafe {
             let first = &mut *(self.0 as *mut SlabAllocatorFirstHeader);
 
@@ -528,7 +529,7 @@ impl SlabAllocator {
                 return Err(AllocError);
             }
 
-            if first.available < REALLOCATE_THRESHOLD && recurse && self.grow(first).is_none() {
+            if first.available < REALLOCATE_THRESHOLD && self.grow(first).is_none() {
                 log::error!("{}: failed to grow slab", first.name);
 
                 return Err(AllocError);
@@ -551,19 +552,17 @@ impl SlabAllocator {
             Ok(allocation)
         }
     }
-}
 
-unsafe impl Allocator for SlabAllocator {
-    fn allocate(
-        &self,
-        layout: Layout,
-    ) -> Result<core::ptr::NonNull<[u8]>, alloc::alloc::AllocError> {
-        self.allocate_should_recurse(layout, true)
-    }
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, _layout: Layout) {
+        unsafe {
+            let first = &mut *(self.0 as *mut SlabAllocatorFirstHeader);
 
-    unsafe fn deallocate(&self, _ptr: core::ptr::NonNull<u8>, _layout: Layout) {
-        // TODO: deallocate in slab allocator
-        todo!()
+            let link = ptr.as_ptr() as *mut SlabAllocatorLink;
+            *link = SlabAllocatorLink(first.free_head);
+
+            first.free_head = link;
+            first.available += 1;
+        }
     }
 }
 
