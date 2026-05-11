@@ -458,7 +458,6 @@ unsafe impl GlobalAlloc for BuddyAllocator {
     }
 }
 
-#[global_allocator]
 static BUDDY_ALLOCATOR: BuddyAllocator = BuddyAllocator {
     inner: UnsafeCell::new(None),
 };
@@ -630,6 +629,143 @@ unsafe impl Allocator for SlabAllocator {
     }
 }
 
+struct AutoAllocatorInner {
+    size_8: SlabAllocator,
+    size_16: SlabAllocator,
+    size_32: SlabAllocator,
+    size_64: SlabAllocator,
+    size_128: SlabAllocator,
+    size_256: SlabAllocator,
+    size_512: SlabAllocator,
+    size_1k: SlabAllocator,
+}
+
+impl AutoAllocatorInner {
+    fn new() -> AutoAllocatorInner {
+        AutoAllocatorInner {
+            size_8: SlabAllocator::new::<[u64; 1]>("auto_size_8"),
+            size_16: SlabAllocator::new::<[u64; 2]>("auto_size_16"),
+            size_32: SlabAllocator::new::<[u64; 4]>("auto_size_32"),
+            size_64: SlabAllocator::new::<[u64; 8]>("auto_size_64"),
+            size_128: SlabAllocator::new::<[u64; 16]>("auto_size_128"),
+            size_256: SlabAllocator::new::<[u64; 32]>("auto_size_256"),
+            size_512: SlabAllocator::new::<[u64; 64]>("auto_size_512"),
+            size_1k: SlabAllocator::new::<[u64; 128]>("auto_size_1k"),
+        }
+    }
+
+    fn alloc(&mut self, layout: Layout) -> *mut u8 {
+        unsafe {
+            if layout.align() > 8 || layout.size() > 1024 {
+                return BUDDY_ALLOCATOR.alloc(layout);
+            }
+
+            let allocator = if layout.size() <= 8 {
+                self.size_8
+            } else if layout.size() <= 16 {
+                self.size_16
+            } else if layout.size() <= 32 {
+                self.size_32
+            } else if layout.size() <= 64 {
+                self.size_64
+            } else if layout.size() <= 128 {
+                self.size_128
+            } else if layout.size() <= 256 {
+                self.size_256
+            } else if layout.size() <= 512 {
+                self.size_512
+            } else {
+                self.size_1k
+            };
+
+            allocator
+                .allocate(layout)
+                .map(|mut val| val.as_mut().as_mut_ptr())
+                .unwrap_or(ptr::null_mut())
+        }
+    }
+
+    fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            if layout.align() > 8 || layout.size() > 1024 {
+                BUDDY_ALLOCATOR.dealloc(ptr, layout);
+                return;
+            }
+
+            let allocator = if layout.size() <= 8 {
+                self.size_8
+            } else if layout.size() <= 16 {
+                self.size_16
+            } else if layout.size() <= 32 {
+                self.size_32
+            } else if layout.size() <= 64 {
+                self.size_64
+            } else if layout.size() <= 128 {
+                self.size_128
+            } else if layout.size() <= 256 {
+                self.size_256
+            } else if layout.size() <= 512 {
+                self.size_512
+            } else {
+                self.size_1k
+            };
+
+            allocator.deallocate(NonNull::new(ptr).unwrap(), layout);
+        }
+    }
+}
+
+struct AutoAllocator {
+    // TODO: lock for thread safety
+    inner: UnsafeCell<Option<AutoAllocatorInner>>,
+}
+
+impl AutoAllocator {
+    fn init(&self) {
+        unsafe {
+            assert!((*self.inner.get()).is_none());
+
+            let inner = AutoAllocatorInner::new();
+
+            *self.inner.get() = Some(inner);
+        }
+    }
+}
+
+unsafe impl GlobalAlloc for AutoAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe {
+            self.inner
+                .get()
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .alloc(layout)
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe {
+            self.inner
+                .get()
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .dealloc(ptr, layout)
+        }
+    }
+}
+
+unsafe impl Sync for AutoAllocator {}
+
+#[global_allocator]
+static AUTO_ALLOCATOR: AutoAllocator = AutoAllocator {
+    inner: UnsafeCell::new(None),
+};
+
 pub fn setup(boot_info: &BootInfo) {
     BUDDY_ALLOCATOR.init(boot_info);
+    AUTO_ALLOCATOR.init();
 }

@@ -76,7 +76,7 @@ pub fn main(boot_info: BootInfo) -> ! {
     print!("{BOOT_MESSAGE}");
 
     log::set_logger(&LOGGER)
-        .map(|()| log::set_max_level(log::LevelFilter::Info))
+        .map(|()| log::set_max_level(log::LevelFilter::Debug))
         .unwrap();
 
     allocator::setup(&boot_info);
@@ -85,11 +85,7 @@ pub fn main(boot_info: BootInfo) -> ! {
 
     log::info!("We just heap allocated some things: {things:?}");
 
-    let int_slab = allocator::SlabAllocator::new::<usize>("int_slab");
-
-    let more_things = (0..100_000)
-        .map(|i| Box::new_in(i, int_slab))
-        .collect::<Vec<_>>();
+    let more_things = (0..100_000).map(Box::new).collect::<Vec<_>>();
 
     log::info!("We just heap allocated some more things!");
 
