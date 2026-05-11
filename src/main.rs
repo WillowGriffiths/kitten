@@ -18,6 +18,40 @@ use crate::arch::boot::BootInfo;
 
 const BOOT_MESSAGE: &str = include_str!("./boot_message.txt");
 
+struct Logger;
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Debug
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let color_code = match record.level() {
+                log::Level::Error => "\x1b[31m",
+                log::Level::Warn => "\x1b[33m",
+                log::Level::Info => "\x1b[32m",
+                log::Level::Debug => "\x1b[35m",
+                log::Level::Trace => "\x1b[36m",
+            };
+
+            let color_reset = "\x1b[0m";
+
+            println!(
+                "{}:{} {color_code}{}{color_reset} - {}",
+                record.file().unwrap(),
+                record.line().unwrap(),
+                record.level(),
+                record.args()
+            )
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: Logger = Logger;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let message = info.message();
@@ -40,6 +74,10 @@ fn panic(info: &PanicInfo) -> ! {
 
 pub fn main(boot_info: BootInfo) -> ! {
     print!("{BOOT_MESSAGE}");
+
+    log::set_logger(&LOGGER)
+        .map(|()| log::set_max_level(log::LevelFilter::Debug))
+        .unwrap();
 
     allocator::setup(&boot_info);
 
