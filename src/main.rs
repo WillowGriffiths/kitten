@@ -93,8 +93,7 @@ pub fn main(boot_info: BootInfo) -> ! {
 
     log::info!("We just heap allocated some more things!");
 
-    log::info!("Expecting a panic now!");
-    // will fail; deallocation is unimplemented
+    log::info!("Deallocating now!");
     drop(things);
     drop(more_things);
 

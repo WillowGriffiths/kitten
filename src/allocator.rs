@@ -183,6 +183,16 @@ impl BuddyInner {
         Some(new_node)
     }
 
+    fn free_node(&mut self, node: *mut BuddyNode) {
+        unsafe {
+            let link = node as *mut BuddyLink;
+            *link = BuddyLink(self.free_head);
+
+            self.free_head = link;
+            self.capacity += 1;
+        }
+    }
+
     fn reserve_range(&mut self, start: usize, len: usize) {
         let (addr_start, _) = memory::ram_start();
 
@@ -286,7 +296,7 @@ impl BuddyInner {
         ) -> Option<usize> {
             unsafe {
                 let this_size = BUDDY_ORDER0 * 2_usize.pow(this_order);
-                let mid = this_size / 2;
+                let mid = this_address + this_size / 2;
 
                 // found a suitable place to allocate
                 if this_order == desired_order
@@ -320,13 +330,7 @@ impl BuddyInner {
                     {
                         return Some(addr);
                     } else {
-                        return inner(
-                            this,
-                            right,
-                            this_order - 1,
-                            desired_order,
-                            this_address + mid,
-                        );
+                        return inner(this, right, this_order - 1, desired_order, mid);
                     }
                 }
 
@@ -347,6 +351,59 @@ impl BuddyInner {
         } else {
             ptr::null_mut()
         }
+    }
+
+    fn dealloc(&mut self, ptr: *mut u8) {
+        fn inner(
+            this: &mut BuddyInner,
+            addr: usize,
+            this_node: *mut BuddyNode,
+            this_order: u32,
+            this_addr: usize,
+        ) {
+            unsafe {
+                let this_size = 2_usize.pow(this_order) * BUDDY_ORDER0;
+                let mid = this_addr + this_size / 2;
+
+                if let BuddyNode::Branch(left, right) = *this_node {
+                    if addr >= mid {
+                        inner(this, addr, right, this_order - 1, mid);
+                    } else {
+                        inner(this, addr, left, this_order - 1, this_addr);
+                    }
+
+                    if let BuddyNode::Unallocated = *left
+                        && let BuddyNode::Unallocated = *right
+                    {
+                        this.free_node(left);
+                        this.free_node(right);
+
+                        *this_node = BuddyNode::Unallocated;
+                    }
+
+                    return;
+                }
+
+                if let BuddyNode::Allocated = *this_node {
+                    *this_node = BuddyNode::Unallocated;
+
+                    return;
+                }
+
+                panic!("invalid buddy state");
+            }
+        }
+
+        let (_, start_addr) = memory::ram_start();
+
+        let addr = ptr as usize;
+        inner(
+            self,
+            addr,
+            self.root_node,
+            self.max_order as u32,
+            start_addr as usize,
+        );
     }
 }
 
@@ -388,9 +445,16 @@ unsafe impl GlobalAlloc for BuddyAllocator {
         }
     }
 
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {
-        // TODO: deallocate in buddy allocator
-        todo!()
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: core::alloc::Layout) {
+        unsafe {
+            self.inner
+                .get()
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .dealloc(ptr);
+        }
     }
 }
 
