@@ -12,7 +12,7 @@ mod memory;
 
 use core::panic::PanicInfo;
 
-use alloc::vec;
+use alloc::{boxed::Box, vec, vec::Vec};
 
 use crate::arch::boot::BootInfo;
 
@@ -83,11 +83,20 @@ pub fn main(boot_info: BootInfo) -> ! {
 
     let things = vec!["thing 1", "thing 2", "thing 3"];
 
-    println!("We just heap allocated some things: {things:?}");
+    log::info!("We just heap allocated some things: {things:?}");
 
-    println!("Expecting a panic now!");
+    let int_slab = allocator::SlabAllocator::new::<usize>("int_slab");
+
+    let more_things = (0..100_000)
+        .map(|i| Box::new_in(i, int_slab))
+        .collect::<Vec<_>>();
+
+    log::info!("We just heap allocated some more things!");
+
+    log::info!("Expecting a panic now!");
     // will fail; deallocation is unimplemented
     drop(things);
+    drop(more_things);
 
     loop {
         arch::wfi();

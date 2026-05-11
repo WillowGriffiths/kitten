@@ -13,88 +13,184 @@ use crate::{
 };
 
 struct BuddyAllocator {
-    data: UnsafeCell<Option<BuddyAllocatorData>>,
+    inner: UnsafeCell<Option<BuddyInner>>,
 }
 
-struct BuddyAllocatorData {
-    slab: SlabAllocator,
+struct BuddyHeader(*mut Page);
+
+struct BuddyLink(*mut BuddyLink);
+
+struct BuddyInner {
     root_node: *mut BuddyNode,
     max_order: usize,
     can_alloc: bool,
+
+    free_head: *mut BuddyLink,
+    first_page: *mut Page,
+    capacity: usize,
+    needs_grow: bool,
 }
 
-unsafe impl Sync for BuddyAllocator {}
+impl BuddyInner {
+    #[inline(always)]
+    fn align() -> usize {
+        mem::align_of::<BuddyNode>().next_multiple_of(mem::align_of::<BuddyLink>())
+    }
 
-#[derive(Default)]
-enum BuddyNode {
-    #[default]
-    Unallocated,
-    Allocated,
-    Branch(*mut BuddyNode, *mut BuddyNode),
-}
+    #[inline(always)]
+    fn offset() -> usize {
+        let align = Self::align();
+        mem::size_of::<BuddyNode>().next_multiple_of(align)
+    }
 
-static mut BUDDY_SLAB_PAGE: Page = ZEROED_PAGE;
+    #[inline(always)]
+    fn size() -> usize {
+        mem::size_of::<BuddyNode>().next_multiple_of(mem::size_of::<BuddyLink>())
+    }
 
-const BUDDY_ORDER0: usize = memory::PAGE_SIZE;
+    #[inline(always)]
+    fn step() -> usize {
+        let align = Self::align();
+        Self::size().next_multiple_of(align)
+    }
 
-impl BuddyAllocator {
-    fn init(&self, boot_info: &BootInfo) {
-        if unsafe { (*self.data.get()).is_some() } {
-            panic!("Reinitialising buddy allocator");
-        }
+    #[inline(always)]
+    fn count() -> usize {
+        let offset = Self::offset();
+        let step = Self::step();
+        (memory::PAGE_SIZE - offset) / step
+    }
 
-        let slab =
-            unsafe { SlabAllocator::new_no_alloc::<BuddyNode>(&raw mut BUDDY_SLAB_PAGE, false) };
-
-        let mut max_order = 0;
-
-        while BUDDY_ORDER0 * 2_usize.pow(max_order) < boot_info.memory_info.memory.len as usize {
-            max_order += 1;
-        }
-
-        let root_node = slab
-            .allocate_should_recurse(Layout::new::<BuddyNode>(), false)
-            .unwrap()
-            .as_ptr() as *mut BuddyNode;
-
-        unsafe { *root_node = BuddyNode::Unallocated };
-
-        let data = BuddyAllocatorData {
-            slab,
-            root_node,
-            max_order: max_order as usize,
-            can_alloc: false,
-        };
-
+    unsafe fn init_page(page: *mut Page) {
         unsafe {
-            *self.data.get() = Some(data);
-        }
+            *(page as *mut BuddyHeader) = BuddyHeader(ptr::null_mut());
 
-        for memory::MemoryRange { start, len } in &boot_info.resv[0..boot_info.resv_count] {
-            self.reserve_range(*start as usize, *len as usize);
-        }
+            let step = Self::step();
+            let count = Self::count();
+            let first_slot = page.byte_add(Self::offset()) as *mut BuddyLink;
 
-        unsafe {
-            self.data
-                .get()
-                .as_mut()
-                .unwrap()
-                .as_mut()
-                .unwrap()
-                .can_alloc = true
+            for i in 0..count - 1 {
+                let slot = first_slot.byte_add(i * step);
+                let next = slot.byte_add(Self::step());
+
+                *slot = BuddyLink(next);
+            }
+
+            let last_slot = first_slot.byte_add((count - 1) * step);
+            *last_slot = BuddyLink(ptr::null_mut());
         }
     }
 
-    fn reserve_range(&self, start: usize, len: usize) {
-        let data = unsafe { self.data.get().as_mut().unwrap().as_mut().unwrap() };
+    fn new(boot_info: &BootInfo) -> BuddyInner {
+        unsafe {
+            let max_order = (0..u32::MAX)
+                .find(|&i| {
+                    BUDDY_ORDER0 * 2_usize.pow(i) > boot_info.memory_info.memory.len as usize
+                })
+                .unwrap();
+
+            let first_page = &raw mut BUDDY_PAGE;
+
+            Self::init_page(first_page);
+
+            let offset = Self::offset();
+            let step = Self::step();
+
+            let root_node = first_page.byte_add(offset) as *mut BuddyNode;
+            *root_node = BuddyNode::Unallocated;
+
+            let free_head = first_page.byte_add(offset + step) as *mut BuddyLink;
+
+            let mut inner = BuddyInner {
+                root_node,
+                max_order: max_order as usize,
+                can_alloc: false,
+
+                first_page,
+                free_head,
+                capacity: Self::count() - 1,
+                needs_grow: false,
+            };
+
+            for memory::MemoryRange { start, len } in &boot_info.resv[0..boot_info.resv_count] {
+                inner.reserve_range(*start as usize, *len as usize);
+            }
+
+            let allocation_end =
+                boot_info.memory_info.memory.phys as usize + BUDDY_ORDER0 * 2_usize.pow(max_order);
+            let memory_end =
+                (boot_info.memory_info.memory.phys + boot_info.memory_info.memory.len) as usize;
+            let len = allocation_end - memory_end;
+
+            inner.reserve_range(memory_end, len);
+
+            inner.can_alloc = true;
+
+            inner
+        }
+    }
+
+    fn grow(&mut self) {
+        unsafe {
+            log::debug!("buddy allocator: growing!");
+
+            self.needs_grow = false;
+
+            let new_page = self.alloc(Layout::new::<memory::Page>()) as *mut Page;
+            assert!(!new_page.is_null());
+
+            Self::init_page(new_page);
+
+            *(new_page as *mut BuddyHeader) = BuddyHeader(self.first_page);
+
+            let offset = Self::offset();
+            let step = Self::step();
+            let count = Self::count();
+
+            let first_link = new_page.byte_add(offset) as *mut BuddyLink;
+            let last_link = first_link.byte_add(step * (count - 1));
+
+            *last_link = BuddyLink(self.free_head);
+            self.free_head = first_link;
+
+            self.first_page = new_page;
+
+            self.capacity += count;
+        }
+    }
+
+    fn new_node(&mut self) -> Option<*mut BuddyNode> {
+        let reallocate_threshold = 2 * self.max_order;
+
+        if self.capacity == 0 {
+            log::error!("buddy allocator: out of node capacity");
+
+            return None;
+        }
+
+        let free_head = unsafe { (*self.free_head).0 };
+        let new_node = self.free_head as *mut BuddyNode;
+        unsafe { *new_node = Default::default() };
+        self.free_head = free_head;
+
+        self.capacity -= 1;
+
+        if self.capacity <= reallocate_threshold {
+            self.needs_grow = true;
+        }
+
+        Some(new_node)
+    }
+
+    fn reserve_range(&mut self, start: usize, len: usize) {
+        let (addr_start, _) = memory::ram_start();
 
         let start_aligned = start / BUDDY_ORDER0 * BUDDY_ORDER0;
-        let start_virt = memory::to_virt(start_aligned as u64);
         let end_aligned = (start + len).next_multiple_of(BUDDY_ORDER0);
         let len_aligned = end_aligned - start_aligned;
 
         fn inner(
-            slab: SlabAllocator,
+            this: &mut BuddyInner,
             start: usize,
             len: usize,
             node: *mut BuddyNode,
@@ -126,14 +222,8 @@ impl BuddyAllocator {
                 let mid = this_address + size / 2;
 
                 if let BuddyNode::Unallocated = *node {
-                    let left = slab
-                        .allocate_should_recurse(Layout::new::<BuddyNode>(), false)
-                        .unwrap()
-                        .as_ptr() as *mut BuddyNode;
-                    let right = slab
-                        .allocate_should_recurse(Layout::new::<BuddyNode>(), false)
-                        .unwrap()
-                        .as_ptr() as *mut BuddyNode;
+                    let left = this.new_node().unwrap();
+                    let right = this.new_node().unwrap();
 
                     *left = BuddyNode::Unallocated;
                     *right = BuddyNode::Unallocated;
@@ -146,7 +236,7 @@ impl BuddyAllocator {
 
                 if let BuddyNode::Branch(left, right) = *node {
                     inner(
-                        slab,
+                        this,
                         start,
                         len,
                         left.as_mut().unwrap(),
@@ -154,7 +244,7 @@ impl BuddyAllocator {
                         this_address,
                     );
                     inner(
-                        slab,
+                        this,
                         start,
                         len,
                         right.as_mut().unwrap(),
@@ -165,34 +255,33 @@ impl BuddyAllocator {
             }
         }
 
-        let (_, start) = memory::ram_start();
-
         inner(
-            data.slab,
-            start_virt as usize,
+            self,
+            start_aligned,
             len_aligned,
-            data.root_node,
-            data.max_order as u32,
-            start as usize,
+            self.root_node,
+            self.max_order as u32,
+            addr_start as usize,
         );
     }
 
-    fn alloc_should_recurse(&self, layout: Layout, recurse: bool) -> *mut u8 {
-        let data = unsafe { self.data.get().as_mut().unwrap().as_mut().unwrap() };
+    fn alloc(&mut self, layout: Layout) -> *mut u8 {
+        assert!(self.can_alloc);
 
-        assert!(data.can_alloc);
+        if self.needs_grow {
+            self.grow();
+        }
 
-        let desired_order = (0..data.max_order)
+        let desired_order = (0..=self.max_order)
             .find(|&i| BUDDY_ORDER0 * 2_usize.pow(i as u32) >= layout.size())
             .expect("Allocation too big!") as u32;
 
         fn inner(
-            slab: SlabAllocator,
+            this: &mut BuddyInner,
             node: *mut BuddyNode,
             this_order: u32,
             desired_order: u32,
             this_address: usize,
-            recurse: bool,
         ) -> Option<usize> {
             unsafe {
                 let this_size = BUDDY_ORDER0 * 2_usize.pow(this_order);
@@ -216,14 +305,8 @@ impl BuddyAllocator {
 
                 // branch and repeat
                 if let BuddyNode::Unallocated = *node {
-                    let left = slab
-                        .allocate_should_recurse(Layout::new::<BuddyNode>(), recurse)
-                        .unwrap()
-                        .as_ptr() as *mut BuddyNode;
-                    let right = slab
-                        .allocate_should_recurse(Layout::new::<BuddyNode>(), recurse)
-                        .unwrap()
-                        .as_ptr() as *mut BuddyNode;
+                    let left = this.new_node().unwrap();
+                    let right = this.new_node().unwrap();
 
                     *left = BuddyNode::Unallocated;
                     *right = BuddyNode::Unallocated;
@@ -231,23 +314,17 @@ impl BuddyAllocator {
                 }
 
                 if let BuddyNode::Branch(left, right) = *node {
-                    if let Some(addr) = inner(
-                        slab,
-                        left,
-                        this_order - 1,
-                        desired_order,
-                        this_address,
-                        recurse,
-                    ) {
+                    if let Some(addr) =
+                        inner(this, left, this_order - 1, desired_order, this_address)
+                    {
                         return Some(addr);
                     } else {
                         return inner(
-                            slab,
+                            this,
                             right,
                             this_order - 1,
                             desired_order,
                             this_address + mid,
-                            recurse,
                         );
                     }
                 }
@@ -259,12 +336,11 @@ impl BuddyAllocator {
         let (_, start_addr) = memory::ram_start();
 
         if let Some(addr) = inner(
-            data.slab,
-            data.root_node,
-            data.max_order as u32,
+            self,
+            self.root_node,
+            self.max_order as u32,
             desired_order,
             start_addr as usize,
-            recurse,
         ) {
             addr as *mut u8
         } else {
@@ -273,9 +349,42 @@ impl BuddyAllocator {
     }
 }
 
+unsafe impl Sync for BuddyAllocator {}
+
+#[derive(Default)]
+enum BuddyNode {
+    #[default]
+    Unallocated,
+    Allocated,
+    Branch(*mut BuddyNode, *mut BuddyNode),
+}
+
+static mut BUDDY_PAGE: Page = ZEROED_PAGE;
+
+const BUDDY_ORDER0: usize = memory::PAGE_SIZE;
+
+impl BuddyAllocator {
+    fn init(&self, boot_info: &BootInfo) {
+        unsafe {
+            assert!((*self.inner.get()).is_none());
+
+            let inner = BuddyInner::new(boot_info);
+            *self.inner.get() = Some(inner);
+        }
+    }
+}
+
 unsafe impl GlobalAlloc for BuddyAllocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        self.alloc_should_recurse(layout, true)
+        unsafe {
+            self.inner
+                .get()
+                .as_mut()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .alloc(layout)
+        }
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {
@@ -286,19 +395,19 @@ unsafe impl GlobalAlloc for BuddyAllocator {
 
 #[global_allocator]
 static BUDDY_ALLOCATOR: BuddyAllocator = BuddyAllocator {
-    data: UnsafeCell::new(None),
+    inner: UnsafeCell::new(None),
 };
 
 #[derive(Clone, Copy)]
-struct SlabAllocator(*mut Page);
+pub struct SlabAllocator(*mut Page);
 
 struct SlabAllocatorFirstHeader {
     next_page: *mut u8,
     step: usize,
     offset: usize,
     first_offset: usize,
-    _owned: bool,
     available: usize,
+    name: &'static str,
 
     free_head: *mut SlabAllocatorLink,
 }
@@ -309,24 +418,21 @@ struct SlabAllocatorHeader {
 
 struct SlabAllocatorLink(*mut SlabAllocatorLink);
 
-const REALLOCATE_THRESHOLD: usize = 10;
+const REALLOCATE_THRESHOLD: usize = 32;
 
 impl SlabAllocator {
-    fn new<T>() -> SlabAllocator {
-        unsafe {
-            let first_page = BUDDY_ALLOCATOR.alloc_zeroed(Layout::new::<Page>());
-
-            Self::new_no_alloc::<T>(first_page as *mut Page, true)
-        }
-    }
-
     fn slots_per_page(first_offset: usize, offset: usize, step: usize) -> (usize, usize) {
         let first = (memory::PAGE_SIZE - first_offset) / step;
         let rest = (memory::PAGE_SIZE - offset) / step;
         (first, rest)
     }
 
-    unsafe fn new_no_alloc<T>(first_page: *mut Page, owned: bool) -> SlabAllocator {
+    pub fn new<T>(name: &'static str) -> SlabAllocator {
+        let first_page =
+            unsafe { BUDDY_ALLOCATOR.alloc_zeroed(Layout::new::<Page>()) as *mut Page };
+
+        assert!(!first_page.is_null());
+
         let align = mem::align_of::<T>().max(mem::align_of::<SlabAllocatorLink>());
         let size = mem::size_of::<T>().max(mem::size_of::<SlabAllocatorLink>());
 
@@ -354,8 +460,8 @@ impl SlabAllocator {
                 step,
                 offset,
                 first_offset,
-                _owned: owned,
                 available,
+                name,
 
                 free_head: first_slot,
             };
@@ -364,12 +470,11 @@ impl SlabAllocator {
         SlabAllocator(first_page)
     }
 
-    unsafe fn grow(&self) -> Option<()> {
+    unsafe fn grow(&self, first: &mut SlabAllocatorFirstHeader) -> Option<()> {
         unsafe {
-            let first = &mut *(self.0 as *mut SlabAllocatorFirstHeader);
+            log::debug!("{}: growing!", first.name);
 
-            let new_page =
-                BUDDY_ALLOCATOR.alloc_should_recurse(Layout::new::<memory::Page>(), false);
+            let new_page = BUDDY_ALLOCATOR.alloc(Layout::new::<memory::Page>());
             if new_page.is_null() {
                 return None;
             }
@@ -380,7 +485,8 @@ impl SlabAllocator {
 
             let mut cursor = &mut first.next_page;
             while !(*cursor).is_null() {
-                cursor = &mut (*((*cursor) as *mut SlabAllocatorHeader)).next_page;
+                let ptr = (*cursor) as *mut SlabAllocatorHeader;
+                cursor = &mut (*ptr).next_page;
             }
             *cursor = new_page;
 
@@ -389,7 +495,7 @@ impl SlabAllocator {
             let (_, available) = Self::slots_per_page(first.first_offset, first.offset, first.step);
 
             let last_link = first_slot.byte_add(first.step * (available - 1));
-            *last_link = SlabAllocatorLink(ptr::null_mut());
+            *last_link = SlabAllocatorLink(first.free_head);
 
             for i in 0..available - 1 {
                 let link = first_slot.byte_add(first.step * i);
@@ -398,12 +504,7 @@ impl SlabAllocator {
                 (*link).0 = next_link;
             }
 
-            let mut cursor = &mut (*first.free_head).0;
-            while !(cursor.is_null()) {
-                cursor = &mut (**cursor).0;
-            }
-
-            *cursor = first_slot;
+            first.free_head = first_slot;
 
             first.available += available;
 
@@ -420,14 +521,20 @@ impl SlabAllocator {
             let first = &mut *(self.0 as *mut SlabAllocatorFirstHeader);
 
             if layout.size() > first.step || layout.align() > first.step {
+                log::error!("{}: bad allocation layout", first.name);
+
                 return Err(AllocError);
             }
 
-            if first.available < REALLOCATE_THRESHOLD && recurse {
-                self.grow();
+            if first.available < REALLOCATE_THRESHOLD && recurse && self.grow(first).is_none() {
+                log::error!("{}: failed to grow slab", first.name);
+
+                return Err(AllocError);
             }
 
             if first.available == 0 {
+                log::error!("{}: slab out of capacity", first.name);
+
                 return Err(AllocError);
             }
 
