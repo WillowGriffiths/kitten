@@ -8,11 +8,14 @@ struct PageTable([u64; 512]);
 
 static mut ROOT_PAGETABLE: PageTable = PageTable([0; 512]);
 
-const PTE_V: u64 = 1 << 0; // valid
-const PTE_R: u64 = 1 << 1; // readable
-const PTE_W: u64 = 1 << 2; // writable
-const PTE_X: u64 = 1 << 3; // executable
-const PTE_U: u64 = 1 << 4; // user can access
+#[allow(dead_code)]
+mod consts {
+    pub const PTE_V: u64 = 1 << 0; // valid
+    pub const PTE_R: u64 = 1 << 1; // readable
+    pub const PTE_W: u64 = 1 << 2; // writable
+    pub const PTE_X: u64 = 1 << 3; // executable
+    pub const PTE_U: u64 = 1 << 4; // user can access
+}
 
 fn make_pte(addr: u64, flags: u64) -> u64 {
     (addr >> 12) << 10 | flags
@@ -38,8 +41,10 @@ pub(super) fn setup(memory_info: &MemoryInfo) {
         let kernel_physical = memory_info.kernel.phys >> 30 << 30;
 
         // TODO: map kernel with more granularity of permission bits
-        ROOT_PAGETABLE.0[kernel_page_l2 as usize] =
-            make_pte(kernel_physical, PTE_V | PTE_R | PTE_W | PTE_X);
+        ROOT_PAGETABLE.0[kernel_page_l2 as usize] = make_pte(
+            kernel_physical,
+            consts::PTE_V | consts::PTE_R | consts::PTE_W | consts::PTE_X,
+        );
 
         let mut mapping_len = 0;
         while mapping_len < memory_info.memory.len {
@@ -47,7 +52,10 @@ pub(super) fn setup(memory_info: &MemoryInfo) {
             let page_virtual = memory_info.memory.virt + mapping_len;
             let l2 = (page_virtual >> 30) & 0x1ff;
 
-            ROOT_PAGETABLE.0[l2 as usize] = make_pte(page_physical, PTE_V | PTE_R | PTE_W | PTE_X);
+            ROOT_PAGETABLE.0[l2 as usize] = make_pte(
+                page_physical,
+                consts::PTE_V | consts::PTE_R | consts::PTE_W | consts::PTE_X,
+            );
 
             mapping_len += 512 * 512 * 4096;
         }

@@ -30,14 +30,17 @@ macro_rules! println {
     }};
 }
 
+#[allow(unused)]
 pub use {print, println};
 
+#[allow(dead_code)]
 pub enum ResetType {
     Shutdown,
     ColdReboot,
     WarmReboot,
 }
 
+#[allow(dead_code)]
 pub enum ResetReason {
     NoReason,
     SystemFailure,
