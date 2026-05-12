@@ -6,11 +6,11 @@ use core::arch::global_asm;
 global_asm!(include_str!("entry.s"));
 
 #[unsafe(no_mangle)]
-extern "C" fn rust_entry(_hart_id: u64, fdt: *const u8, kernel_start: u64) -> ! {
+extern "C" fn rust_entry(hart_id: u64, fdt: *const u8, kernel_start: u64) -> ! {
     let fdt = unsafe { fdt.sub(0x80000000).add(0xffffffff80000000) };
 
     let fdt_info = FdtInfo::new(fdt);
-    let boot_info = boot_info(&fdt_info, kernel_start);
+    let boot_info = boot_info(&fdt_info, kernel_start, hart_id);
 
     memory::set_memory_info(boot_info.memory_info);
 
@@ -25,6 +25,8 @@ pub struct BootInfo {
     pub resv_count: usize,
     pub resv: [MemoryRange; 16],
     pub cpus: usize,
+
+    pub boot_cpu: u64,
 }
 
 fn parse_memory(node: &mut FdtNode) -> MemoryRange {
@@ -97,7 +99,7 @@ unsafe extern "C" {
     static KERNEL_END: u8;
 }
 
-fn boot_info(fdt_info: &FdtInfo, kernel_start: u64) -> BootInfo {
+fn boot_info(fdt_info: &FdtInfo, kernel_start: u64, hart_id: u64) -> BootInfo {
     let mut memory: Option<MemoryRange> = None;
     let mut resv = None;
     let mut cpus = 0;
@@ -166,5 +168,7 @@ fn boot_info(fdt_info: &FdtInfo, kernel_start: u64) -> BootInfo {
         resv_count,
         resv,
         cpus,
+
+        boot_cpu: hart_id,
     }
 }
