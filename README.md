@@ -26,7 +26,29 @@ non-goals include:
 
 ## Running
 
-If you have `cargo`, `rustup` and `qemu-system-riscv64` installed, running the
-kernel should be as simple as `cargo run`. No real hardware is supported at this
-time. If all goes to plan, you should see some messages printed by the kernel;
-that's all it can do at this time.
+### Dependencies
+
+Aside from rust itself, the only dependency is `qemu-system-riscv64`:
+
+```sh
+# On Debian/Ubuntu
+$ sudo apt install qemu-system-misc
+
+# On Arch
+$ sudo pacman -S qemu-system-riscv
+
+# On Fedora
+$ sudo dnf install qemu-system-riscv
+
+# On MacOS
+$ brew install qemu
+```
+
+Make sure you install rust through rustup so that cargo can install the RISC-V
+target for you automatically.
+
+### Building and running
+
+```
+cargo run
+```
