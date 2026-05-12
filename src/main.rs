@@ -14,8 +14,6 @@ mod sync;
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use alloc::{boxed::Box, vec, vec::Vec};
-
 use crate::arch::boot::BootInfo;
 
 const BOOT_MESSAGE: &str = include_str!("./boot_message.txt");
@@ -93,25 +91,10 @@ pub fn main(boot_info: BootInfo) -> ! {
         .map(|()| log::set_max_level(log::LevelFilter::Info))
         .unwrap();
 
+    log::info!("booting on cpu {}", boot_info.boot_cpu);
+
     allocator::setup(&boot_info);
-
     smt::init(&boot_info);
-
-    log::info!("free ram: {}", allocator::free_ram());
-
-    let things = vec!["thing 1", "thing 2", "thing 3"];
-
-    log::info!("We just heap allocated some things: {things:?}");
-
-    let more_things = (0..100_000).map(Box::new).collect::<Vec<_>>();
-
-    log::info!("We just heap allocated some more things!");
-
-    log::info!("free ram: {}", allocator::free_ram());
-
-    log::info!("Deallocating now!");
-    drop(things);
-    drop(more_things);
 
     log::info!("free ram: {}", allocator::free_ram());
 
