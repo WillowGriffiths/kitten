@@ -6,11 +6,10 @@ A hobby kernel in rust, very early in development at the moment.
 
 - 64-bit RISC-V support
 - Device tree parsing
-- Memory allocation
+- Custom memory allocator (buddy and slab)
 
 ## Plans
 
-- Memory deallocation
 - Custom filesystem
 - Run on the VisionFive 2
 - Full SMT support
