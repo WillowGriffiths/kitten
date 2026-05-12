@@ -78,6 +78,8 @@ pub fn main(boot_info: BootInfo) -> ! {
 
     allocator::setup(&boot_info);
 
+    log::info!("free ram: {}", allocator::free_ram());
+
     let things = vec!["thing 1", "thing 2", "thing 3"];
 
     log::info!("We just heap allocated some things: {things:?}");
@@ -86,9 +88,13 @@ pub fn main(boot_info: BootInfo) -> ! {
 
     log::info!("We just heap allocated some more things!");
 
+    log::info!("free ram: {}", allocator::free_ram());
+
     log::info!("Deallocating now!");
     drop(things);
     drop(more_things);
+
+    log::info!("free ram: {}", allocator::free_ram());
 
     log::info!("shutting down now");
     arch::reset(arch::ResetType::Shutdown, arch::ResetReason::NoReason);

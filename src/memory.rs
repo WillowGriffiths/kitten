@@ -1,3 +1,5 @@
+use core::fmt::Display;
+
 #[derive(Clone, Copy, Debug)]
 pub struct MemoryRange {
     pub start: u64,
@@ -70,3 +72,22 @@ pub const PAGE_SIZE: usize = 4096;
 pub struct Page(pub [u8; PAGE_SIZE]);
 
 pub const ZEROED_PAGE: Page = Page([0; PAGE_SIZE]);
+
+#[derive(Clone, Copy)]
+pub struct Size(pub usize);
+
+impl Display for Size {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0 >= 1024_usize.pow(4) {
+            write!(f, "{}TiB", self.0 / 1024_usize.pow(4))
+        } else if self.0 >= 1024_usize.pow(3) {
+            write!(f, "{}GiB", self.0 / 1024_usize.pow(3))
+        } else if self.0 >= 1024_usize.pow(2) {
+            write!(f, "{}MiB", self.0 / 1024_usize.pow(2))
+        } else if self.0 >= 1024 {
+            write!(f, "{}KiB", self.0 / 1024)
+        } else {
+            write!(f, "{}B", self.0)
+        }
+    }
+}

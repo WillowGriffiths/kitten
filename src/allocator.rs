@@ -29,6 +29,8 @@ struct BuddyInner {
     first_page: *mut Page,
     capacity: usize,
     needs_grow: bool,
+
+    free_ram: usize,
 }
 
 impl BuddyInner {
@@ -110,6 +112,8 @@ impl BuddyInner {
                 free_head,
                 capacity: Self::count() - 1,
                 needs_grow: false,
+
+                free_ram: 2_usize.pow(max_order) * BUDDY_ORDER0,
             };
 
             for memory::MemoryRange { start, len } in &boot_info.resv[0..boot_info.resv_count] {
@@ -220,12 +224,14 @@ impl BuddyInner {
                 // node is fully covered
                 if this_address >= start && this_end <= end {
                     *node = BuddyNode::Allocated;
+                    this.free_ram -= size;
                     return;
                 }
 
                 // partial overlap
                 if this_order == 0 {
                     *node = BuddyNode::Allocated;
+                    this.free_ram -= size;
                     return;
                 }
 
@@ -302,6 +308,7 @@ impl BuddyInner {
                     && let BuddyNode::Unallocated = *node
                 {
                     *node = BuddyNode::Allocated;
+                    this.free_ram -= this_size;
                     return Some(this_address);
                 }
 
@@ -385,6 +392,7 @@ impl BuddyInner {
 
                 if let BuddyNode::Allocated = *this_node {
                     *this_node = BuddyNode::Unallocated;
+                    this.free_ram += this_size;
 
                     return;
                 }
@@ -427,6 +435,10 @@ impl BuddyAllocator {
 
         let inner = BuddyInner::new(boot_info);
         *lock = Some(inner);
+    }
+
+    fn free_ram(&self) -> memory::Size {
+        memory::Size(self.inner.lock().as_ref().unwrap().free_ram)
     }
 }
 
@@ -734,6 +746,10 @@ unsafe impl Sync for AutoAllocator {}
 static AUTO_ALLOCATOR: AutoAllocator = AutoAllocator {
     inner: SpinLock::new(None),
 };
+
+pub fn free_ram() -> memory::Size {
+    BUDDY_ALLOCATOR.free_ram()
+}
 
 pub fn setup(boot_info: &BootInfo) {
     BUDDY_ALLOCATOR.init(boot_info);
