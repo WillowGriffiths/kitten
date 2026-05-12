@@ -90,7 +90,6 @@ pub fn main(boot_info: BootInfo) -> ! {
     drop(things);
     drop(more_things);
 
-    loop {
-        arch::wfi();
-    }
+    log::info!("shutting down now");
+    arch::reset(arch::ResetType::Shutdown, arch::ResetReason::NoReason);
 }
