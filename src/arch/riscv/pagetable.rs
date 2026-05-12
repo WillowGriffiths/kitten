@@ -52,10 +52,8 @@ pub(super) fn setup(memory_info: &MemoryInfo) {
             let page_virtual = memory_info.memory.virt + mapping_len;
             let l2 = (page_virtual >> 30) & 0x1ff;
 
-            ROOT_PAGETABLE.0[l2 as usize] = make_pte(
-                page_physical,
-                consts::PTE_V | consts::PTE_R | consts::PTE_W | consts::PTE_X,
-            );
+            ROOT_PAGETABLE.0[l2 as usize] =
+                make_pte(page_physical, consts::PTE_V | consts::PTE_R | consts::PTE_W);
 
             mapping_len += 512 * 512 * 4096;
         }
