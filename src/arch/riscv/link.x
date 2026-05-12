@@ -35,6 +35,10 @@ SECTIONS
     .rodata : AT(. - DIFF) {
         . = ALIGN(8);
         *(.rodata*)
+
+        _kernel_start_addr = .;
+        QUAD(ABSOLUTE(__kernel_start));
+
         . = ALIGN(8);
     }
     .data : AT(. - DIFF) { 
