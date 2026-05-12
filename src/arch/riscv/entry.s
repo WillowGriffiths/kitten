@@ -27,6 +27,62 @@ _start:
 1:  wfi
     j 1b
 
+
+// By the time _secondary_start is executed, the core initialisation tasks will
+// have already been executed on the main core. This includes setting up page
+// tables and the memory allocator. The bringup sequence for secondary cores is
+// therefore quite simple; we just need to load the correct page table and jump
+// into the Rust code.
+//
+// For reference, the definition of BootRes:
+//
+// struct BootRes:
+//     stack: Box<CpuStack>
+//     pagetable: usize
+//     cpu_id: u64
+//
+// fn _secondary_start(_hart_id: u64, boot_res: Box<BootRes>) -> !
+.global _secondary_start
+.type _secondary_start, @function
+_secondary_start:
+    mv a0, a1
+    ld sp, 0(a0)
+
+    li t0, 8
+    slli t0, t0, 60
+    la t1, __boot_page_table
+    srli t1, t1, 12
+    or t0, t0, t1
+
+    sfence.vma zero, zero
+    csrw satp, t0
+    sfence.vma zero, zero
+
+    lui t0, %hi(entry_shim)
+    jalr %lo(entry_shim)(t0)
+
+.section .text
+
+// We need to load the page table before jumping to rust, so that the stack is
+// mapped correctly.
+//
+// fn entry_shim(boot_res: Box<BootRes>) -> !
+.type _entry_shim, @function
+entry_shim:
+    li t0, 8
+    slli t0, t0, 60
+    ld t1, 8(a0)
+    srli t1, t1, 12
+    or t0, t0, t1
+
+    sfence.vma zero, zero
+    csrw satp, t0
+    sfence.vma zero, zero
+
+    call secondary_rust_entry
+
+.section .text.boot
+
 // fn early_setup() -> void
 .type early_setup, @function
 early_setup:

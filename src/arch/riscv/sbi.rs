@@ -1,7 +1,9 @@
+use alloc::boxed::Box;
+
 use crate::{
     arch::{self, ResetReason, ResetType},
     memory,
-    sync::SpinLock,
+    smt::BootRes,
 };
 
 #[allow(dead_code)]
@@ -151,11 +153,7 @@ fn sbi_call(
     (error, value)
 }
 
-static PRINT_LOCK: SpinLock<()> = SpinLock::new(());
-
-pub fn print_str(s: &str) {
-    let _lock = PRINT_LOCK.lock();
-
+pub(in crate::arch) fn print_str(s: &str) {
     let bytes = s.as_bytes();
     let ptr = bytes.as_ptr() as usize;
     let phys = memory::to_phys(ptr as u64) as usize;
@@ -199,4 +197,26 @@ pub fn reset(reset_type: ResetType, reset_reason: ResetReason) -> ! {
     loop {
         arch::wfi();
     }
+}
+
+unsafe extern "C" {
+    static _secondary_start_addr: usize;
+}
+
+pub fn start_cpu(index: u64, data: Box<BootRes>) {
+    let ptr = Box::into_raw(data) as usize;
+    // TODO: settle on either u64 or usize everywhere
+    let ptr_phys = memory::to_phys(ptr as u64) as usize;
+
+    let entry_addr = unsafe { _secondary_start_addr };
+
+    sbi_call(
+        consts::EID_HSM,
+        consts::FID_HSM_HART_START,
+        index as usize,
+        entry_addr,
+        ptr_phys,
+        0,
+        0,
+    );
 }

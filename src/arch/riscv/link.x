@@ -39,6 +39,9 @@ SECTIONS
         _kernel_start_addr = .;
         QUAD(ABSOLUTE(__kernel_start));
 
+        _secondary_start_addr = .;
+        QUAD(ABSOLUTE(_secondary_start));
+
         . = ALIGN(8);
     }
     .data : AT(. - DIFF) { 

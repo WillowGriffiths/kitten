@@ -1,10 +1,10 @@
 use core::arch::asm;
 
 pub mod boot;
-mod pagetable;
+pub mod pagetable;
 
 mod sbi;
-pub use sbi::{print_str, reset};
+pub use sbi::*;
 
 pub fn wfi() {
     unsafe {

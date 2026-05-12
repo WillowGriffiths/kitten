@@ -61,3 +61,9 @@ pub(super) fn setup(memory_info: &MemoryInfo) {
         set_pagetable(&raw const ROOT_PAGETABLE);
     }
 }
+
+pub fn get_pagetable() -> usize {
+    let ptr = &raw const ROOT_PAGETABLE;
+
+    memory::to_phys(ptr as u64) as usize
+}

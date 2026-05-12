@@ -9,9 +9,10 @@ mod allocator;
 mod arch;
 mod device_tree;
 mod memory;
+mod smt;
 mod sync;
 
-use core::panic::PanicInfo;
+use core::{fmt::Write, panic::PanicInfo};
 
 use alloc::{boxed::Box, vec, vec::Vec};
 
@@ -38,13 +39,16 @@ impl log::Log for Logger {
 
             let color_reset = "\x1b[0m";
 
-            println!(
+            let mut writer = arch::CONSOLE_WRITER.lock();
+
+            _ = writeln!(
+                writer,
                 "{}:{} {color_code}{}{color_reset} - {}",
                 record.file().unwrap(),
                 record.line().unwrap(),
                 record.level(),
                 record.args()
-            )
+            );
         }
     }
 
@@ -56,27 +60,42 @@ static LOGGER: Logger = Logger;
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     let message = info.message();
+    let mut writer = arch::CONSOLE_WRITER.lock();
+
     if let Some(location) = info.location() {
-        println!(
+        _ = writeln!(
+            writer,
             "panic at {}:{}: {message:?}",
             location.file(),
             location.line()
         );
     } else {
-        println!("panic: {message:?}");
+        _ = writeln!(writer, "panic: {message:?}");
     }
 
     arch::reset(arch::ResetType::Shutdown, arch::ResetReason::SystemFailure);
 }
 
+pub fn secondary_main(boot_res: smt::BootRes) -> ! {
+    log::info!("hello from cpu {}", boot_res.cpu_id);
+
+    loop {
+        arch::wfi();
+    }
+}
+
 pub fn main(boot_info: BootInfo) -> ! {
-    print!("{BOOT_MESSAGE}");
+    let mut writer = arch::CONSOLE_WRITER.lock();
+    _ = write!(writer, "{BOOT_MESSAGE}");
+    drop(writer);
 
     log::set_logger(&LOGGER)
         .map(|()| log::set_max_level(log::LevelFilter::Info))
         .unwrap();
 
     allocator::setup(&boot_info);
+
+    smt::init(&boot_info);
 
     log::info!("free ram: {}", allocator::free_ram());
 
@@ -96,6 +115,7 @@ pub fn main(boot_info: BootInfo) -> ! {
 
     log::info!("free ram: {}", allocator::free_ram());
 
-    log::info!("shutting down now");
-    arch::reset(arch::ResetType::Shutdown, arch::ResetReason::NoReason);
+    loop {
+        arch::wfi();
+    }
 }

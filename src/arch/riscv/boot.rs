@@ -1,6 +1,9 @@
+use alloc::boxed::Box;
+
 use crate::arch::riscv::pagetable;
 use crate::device_tree::{FdtInfo, FdtNode, FdtNodeChild};
 use crate::memory::{self, MemoryInfo, MemoryMapping, MemoryRange};
+use crate::smt::BootRes;
 use core::arch::global_asm;
 
 global_asm!(include_str!("entry.s"));
@@ -21,6 +24,14 @@ extern "C" fn rust_entry(hart_id: u64, fdt: *const u8) -> ! {
     pagetable::setup(&boot_info.memory_info);
 
     crate::main(boot_info);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn secondary_rust_entry(boot_res_phys: usize) {
+    let boot_res_virt = memory::to_virt(boot_res_phys as u64) as *mut BootRes;
+    let boot_res = unsafe { Box::from_raw(boot_res_virt) };
+
+    crate::secondary_main(*boot_res);
 }
 
 #[derive(Debug)]
