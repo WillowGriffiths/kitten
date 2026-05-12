@@ -67,10 +67,6 @@ fn panic(info: &PanicInfo) -> ! {
     }
 
     arch::reset(arch::ResetType::Shutdown, arch::ResetReason::SystemFailure);
-
-    loop {
-        arch::wfi();
-    }
 }
 
 pub fn main(boot_info: BootInfo) -> ! {

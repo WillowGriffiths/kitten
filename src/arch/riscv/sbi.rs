@@ -1,5 +1,5 @@
 use crate::{
-    arch::{ResetReason, ResetType},
+    arch::{self, ResetReason, ResetType},
     memory,
     sync::SpinLock,
 };
@@ -172,7 +172,7 @@ pub fn print_str(s: &str) {
     );
 }
 
-pub fn reset(reset_type: ResetType, reset_reason: ResetReason) {
+pub fn reset(reset_type: ResetType, reset_reason: ResetReason) -> ! {
     let reset_type_sbi = match reset_type {
         ResetType::Shutdown => consts::RESET_TYPE_SHUTDOWN,
         ResetType::ColdReboot => consts::RESET_TYPE_COLD_REBOOT,
@@ -193,4 +193,10 @@ pub fn reset(reset_type: ResetType, reset_reason: ResetReason) {
         0,
         0,
     );
+
+    log::error!("failed to shut down");
+
+    loop {
+        arch::wfi();
+    }
 }
