@@ -21,7 +21,7 @@ fn make_pte(addr: u64, flags: u64) -> u64 {
     (addr >> 12) << 10 | flags
 }
 
-fn set_pagetable(pagetable: *const PageTable) {
+unsafe fn set_pagetable(pagetable: *const PageTable) {
     unsafe {
         let addr = memory::to_phys(pagetable as u64);
         let satp = (8 << 60) | (addr >> 12);
