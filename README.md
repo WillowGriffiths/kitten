@@ -52,3 +52,13 @@ target for you automatically.
 ```
 cargo run
 ```
+
+### Building OpenSBI
+
+A binary copy of OpenSBI is included. You can also compile it using clang with
+[just](https://github.com/casey/just) if needed:
+
+```
+git submodule update --init
+just build-opensbi
+```
