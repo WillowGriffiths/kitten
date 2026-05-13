@@ -37,9 +37,10 @@ _start:
 // For reference, the definition of BootRes:
 //
 // struct BootRes:
-//     stack: Box<CpuStack>
+//     stack_top: *const u8
 //     pagetable: usize
 //     cpu_id: u64
+//     stack: Box<CpuStack>
 //
 // fn _secondary_start(_hart_id: u64, boot_res: Box<BootRes>) -> !
 .global _secondary_start
