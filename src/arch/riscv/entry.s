@@ -10,6 +10,9 @@
 .global _start
 .type _start, @function
 _start:
+    li t0, 0
+    csrw sscratch, t0
+
     mv s0, a0
     mv s1, a1
 
@@ -46,6 +49,9 @@ _start:
 .global _secondary_start
 .type _secondary_start, @function
 _secondary_start:
+    li t0, 0
+    csrw sscratch, t0
+
     mv a0, a1
     ld sp, 0(a0)
 
@@ -68,7 +74,7 @@ _secondary_start:
 // mapped correctly.
 //
 // fn entry_shim(boot_res: Box<BootRes>) -> !
-.type _entry_shim, @function
+.type entry_shim, @function
 entry_shim:
     li t0, 8
     slli t0, t0, 60

@@ -9,15 +9,16 @@ mod allocator;
 mod arch;
 mod device_tree;
 mod memory;
-mod multicore;
+mod scheduler;
+mod smp;
 mod sync;
 
 use core::{fmt::Write, panic::PanicInfo};
 
 use crate::{
-    arch::{boot::BootInfo, thread},
+    arch::boot::BootInfo,
     device_tree::{FdtInfo, FdtNode, FdtNodeChild},
-    multicore::BootRes,
+    smp::BootRes,
 };
 
 const BOOT_MESSAGE: &str = include_str!("./boot_message.txt");
@@ -112,7 +113,8 @@ fn parse_cpus(node: FdtNode) -> Option<usize> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct DeviceTreeInfo {
+#[repr(C)]
+pub struct DeviceTreeInfo {
     timebase_frequency: usize,
 }
 
@@ -137,56 +139,62 @@ fn parse_device_tree(boot_info: &BootInfo) -> DeviceTreeInfo {
     }
 
     DeviceTreeInfo {
-        timebase_frequency: timebase_frequency.expect("failed to fine timebase-frequency"),
+        timebase_frequency: timebase_frequency.expect("failed to find timebase-frequency"),
     }
 }
 
 pub fn main(data: BootData) -> ! {
-    if let BootData::Primary(boot_info) = data {
-        let mut writer = arch::CONSOLE_WRITER.lock();
-        _ = write!(writer, "{BOOT_MESSAGE}");
-        drop(writer);
+    let (cpu_id, mut our_stack, device_tree_info) = match data {
+        BootData::Primary(boot_info) => {
+            let mut writer = arch::CONSOLE_WRITER.lock();
+            _ = write!(writer, "{BOOT_MESSAGE}");
+            drop(writer);
 
-        log::set_logger(&LOGGER)
-            .map(|()| log::set_max_level(log::LevelFilter::Info))
-            .unwrap();
+            log::set_logger(&LOGGER)
+                .map(|()| log::set_max_level(log::LevelFilter::Info))
+                .unwrap();
 
-        log::debug!("{boot_info:#?}");
+            log::debug!("{boot_info:#?}");
 
-        log::info!("booting on cpu {}", boot_info.boot_cpu);
+            log::info!("booting on cpu {}", boot_info.boot_cpu);
 
-        allocator::setup(&boot_info);
-        let device_tree_info = parse_device_tree(&boot_info);
-        multicore::init(&boot_info);
+            allocator::setup(&boot_info);
+            let device_tree_info = parse_device_tree(&boot_info);
+            smp::init(&boot_info, device_tree_info);
 
-        log::info!(
-            "timebase frequency: {}Hz",
-            device_tree_info.timebase_frequency
-        );
+            log::info!(
+                "timebase frequency: {}Hz",
+                device_tree_info.timebase_frequency
+            );
 
-        log::info!("free ram: {}", allocator::free_ram());
-    }
+            log::info!("free ram: {}", allocator::free_ram());
 
-    let cpu_id = match &data {
-        BootData::Primary(boot_info) => boot_info.boot_cpu,
-        BootData::Secondary(boot_res) => boot_res.cpu_id,
-    };
-
-    let mut boot_res = match data {
-        BootData::Primary(_) => None,
-        BootData::Secondary(boot_res) => Some(boot_res),
-    };
-
-    let thread = thread::new_thread(move || {
-        log::info!("hello from cpu {}", cpu_id);
-
-        // drop the old stack
-        _ = boot_res.take();
-
-        loop {
-            arch::wfi();
+            (boot_info.boot_cpu as usize, None, device_tree_info)
         }
-    });
+        BootData::Secondary(boot_res) => (
+            boot_res.cpu_id,
+            Some(boot_res.stack),
+            boot_res.device_tree_info,
+        ),
+    };
 
-    thread::switch_to_thread(thread);
+    smp::create_ctx(cpu_id, device_tree_info);
+
+    smp::get_ctx()
+        .scheduler
+        .spawn(move || {
+            let cpu_id = smp::get_ctx().cpu_id;
+
+            log::info!("hello from cpu {}", cpu_id);
+
+            // drop the old stack
+            _ = our_stack.take();
+
+            loop {
+                arch::wfi();
+            }
+        })
+        .expect("failed to spawn task");
+
+    smp::get_ctx().scheduler.schedule();
 }

@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use crate::{
     arch::{self, ResetReason, ResetType},
     memory,
-    multicore::BootRes,
+    smp::BootRes,
 };
 
 #[allow(dead_code)]
@@ -203,7 +203,7 @@ unsafe extern "C" {
     static _secondary_start_addr: usize;
 }
 
-pub fn start_cpu(index: u64, data: Box<BootRes>) {
+pub fn start_cpu(index: usize, data: Box<BootRes>) {
     let ptr = Box::into_raw(data) as usize;
     // TODO: settle on either u64 or usize everywhere
     let ptr_phys = memory::to_phys(ptr as u64) as usize;
@@ -213,7 +213,7 @@ pub fn start_cpu(index: u64, data: Box<BootRes>) {
     sbi_call(
         consts::EID_HSM,
         consts::FID_HSM_HART_START,
-        index as usize,
+        index,
         entry_addr,
         ptr_phys,
         0,

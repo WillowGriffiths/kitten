@@ -1,4 +1,4 @@
-use core::arch::global_asm;
+use core::{arch::global_asm, mem};
 
 use alloc::boxed::Box;
 
@@ -10,8 +10,12 @@ const THREAD_STACK_SIZE: usize = 8 * 1024_usize.pow(2);
 #[repr(C)]
 struct ThreadStack([u8; THREAD_STACK_SIZE]);
 
+const _: () = assert!(mem::offset_of!(Thread, registers) == 0);
+const _: () = assert!(mem::offset_of!(Thread, pc) == 248);
+
 #[repr(C)]
-pub struct ThreadContext {
+pub struct Thread {
+    // skips x0; registers[0] is x1 and so on
     registers: [usize; 31],
     pc: usize,
     stack: *mut ThreadStack,
@@ -25,41 +29,40 @@ extern "C" fn thread_entry(func: Box<Box<dyn FnOnce()>>) -> ! {
     }
 }
 
-pub fn new_thread(func: impl FnOnce() + Send + 'static) -> Box<ThreadContext> {
-    let func_boxed: Box<dyn FnOnce()> = Box::new(func);
-    let func_boxed_boxed = Box::new(func_boxed);
+impl Thread {
+    pub fn spawn(f: impl FnOnce() + Send + 'static) -> Thread {
+        let func_boxed: Box<dyn FnOnce()> = Box::new(f);
+        let func_boxed_boxed = Box::new(func_boxed);
 
-    let stack = unsafe {
-        let mut boxed = Box::<ThreadStack>::new_uninit();
-        boxed.as_mut_ptr().write_bytes(0, 1);
-        Box::into_raw(boxed.assume_init())
-    };
+        let stack = unsafe {
+            let mut boxed = Box::<ThreadStack>::new_uninit();
+            boxed.as_mut_ptr().write_bytes(0, 1);
+            Box::into_raw(boxed.assume_init())
+        };
 
-    let registers = [0; 31];
+        let registers = [0; 31];
 
-    let stack_top = stack as usize + THREAD_STACK_SIZE;
+        let stack_top = stack as usize + THREAD_STACK_SIZE;
 
-    let mut ctx = Box::new(ThreadContext {
-        stack,
-        registers,
-        pc: thread_entry as *const () as usize,
-    });
+        let mut thread = Thread {
+            stack,
+            registers,
+            pc: thread_entry as *const () as usize,
+        };
 
-    ctx.registers[1] = stack_top; // x2 (sp)
-    ctx.registers[3] = &raw mut *ctx as usize; // x3 (tp)
-    ctx.registers[9] = Box::into_raw(func_boxed_boxed) as usize; // x10 (a0)
+        thread.registers[1] = stack_top; // x2 (sp)
+        thread.registers[9] = Box::into_raw(func_boxed_boxed) as usize; // x10 (a0)
 
-    ctx
-}
+        thread
+    }
 
-pub fn switch_to_thread(ctx: Box<ThreadContext>) -> ! {
-    let ptr = Box::into_raw(ctx);
-
-    unsafe {
-        thread_switch(ptr);
+    pub fn switch_to_thread(&mut self) -> ! {
+        unsafe {
+            thread_switch(&raw const *self);
+        }
     }
 }
 
 unsafe extern "C" {
-    fn thread_switch(ctx: *const ThreadContext) -> !;
+    fn thread_switch(ctx: *const Thread) -> !;
 }
