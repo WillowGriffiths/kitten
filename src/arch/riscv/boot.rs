@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use crate::arch::riscv::pagetable;
 use crate::device_tree::{FdtInfo, FdtNode, FdtNodeChild};
 use crate::memory::{self, MemoryInfo, MemoryMapping, MemoryRange};
-use crate::smt::BootRes;
+use crate::multicore::BootRes;
 use core::arch::global_asm;
 
 global_asm!(include_str!("entry.s"));

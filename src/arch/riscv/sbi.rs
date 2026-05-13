@@ -3,7 +3,7 @@ use alloc::boxed::Box;
 use crate::{
     arch::{self, ResetReason, ResetType},
     memory,
-    smt::BootRes,
+    multicore::BootRes,
 };
 
 #[allow(dead_code)]

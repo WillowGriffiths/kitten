@@ -9,7 +9,7 @@ mod allocator;
 mod arch;
 mod device_tree;
 mod memory;
-mod smt;
+mod multicore;
 mod sync;
 
 use core::{fmt::Write, panic::PanicInfo};
@@ -74,7 +74,7 @@ fn panic(info: &PanicInfo) -> ! {
     arch::reset(arch::ResetType::Shutdown, arch::ResetReason::SystemFailure);
 }
 
-pub fn secondary_main(boot_res: smt::BootRes) -> ! {
+pub fn secondary_main(boot_res: multicore::BootRes) -> ! {
     let thread = thread::new_thread(move || {
         log::info!("hello from cpu {}", boot_res.cpu_id);
 
@@ -98,7 +98,7 @@ pub fn main(boot_info: BootInfo) -> ! {
     log::info!("booting on cpu {}", boot_info.boot_cpu);
 
     allocator::setup(&boot_info);
-    smt::init(&boot_info);
+    multicore::init(&boot_info);
 
     log::info!("free ram: {}", allocator::free_ram());
 
