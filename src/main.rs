@@ -16,6 +16,7 @@ use core::{fmt::Write, panic::PanicInfo};
 
 use crate::{
     arch::{boot::BootInfo, thread},
+    device_tree::{FdtInfo, FdtNode, FdtNodeChild},
     multicore::BootRes,
 };
 
@@ -82,6 +83,64 @@ pub enum BootData {
     Secondary(BootRes),
 }
 
+// assume a shared timebase frequency.
+fn parse_cpus(node: FdtNode) -> Option<usize> {
+    let mut timebase_frequency = None;
+
+    for child in node {
+        match child {
+            FdtNodeChild::Node(_node) => {}
+            FdtNodeChild::Prop(name, data) => {
+                if name == "timebase-frequency" {
+                    if timebase_frequency.is_some() {
+                        panic!("timebase-frequency defined twice");
+                    }
+
+                    if data.len() == 4 {
+                        timebase_frequency =
+                            Some(u32::from_be_bytes(data[0..4].try_into().unwrap()) as usize);
+                    } else if data.len() == 8 {
+                        timebase_frequency =
+                            Some(u64::from_be_bytes(data[0..8].try_into().unwrap()) as usize);
+                    }
+                }
+            }
+        }
+    }
+
+    timebase_frequency
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeviceTreeInfo {
+    timebase_frequency: usize,
+}
+
+// boot.rs parses the device tree for certain essential properties. After
+// further initialisation, we can do some more sophisticated parsing with the
+// power of the heap at our disposal.
+fn parse_device_tree(boot_info: &BootInfo) -> DeviceTreeInfo {
+    let addr = memory::to_virt(boot_info.fdt_addr as u64) as *const u8;
+    let fdt = FdtInfo::new(addr);
+
+    let mut timebase_frequency = None;
+
+    for child in fdt.root_node() {
+        match child {
+            FdtNodeChild::Node(node) => {
+                if node.name == "cpus" {
+                    timebase_frequency = parse_cpus(node);
+                }
+            }
+            FdtNodeChild::Prop(_name, _data) => {}
+        }
+    }
+
+    DeviceTreeInfo {
+        timebase_frequency: timebase_frequency.expect("failed to fine timebase-frequency"),
+    }
+}
+
 pub fn main(data: BootData) -> ! {
     if let BootData::Primary(boot_info) = data {
         let mut writer = arch::CONSOLE_WRITER.lock();
@@ -97,7 +156,13 @@ pub fn main(data: BootData) -> ! {
         log::info!("booting on cpu {}", boot_info.boot_cpu);
 
         allocator::setup(&boot_info);
+        let device_tree_info = parse_device_tree(&boot_info);
         multicore::init(&boot_info);
+
+        log::info!(
+            "timebase frequency: {}Hz",
+            device_tree_info.timebase_frequency
+        );
 
         log::info!("free ram: {}", allocator::free_ram());
     }

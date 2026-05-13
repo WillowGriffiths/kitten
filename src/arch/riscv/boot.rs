@@ -13,10 +13,8 @@ unsafe extern "C" {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn rust_entry(hart_id: u64, fdt: *const u8) -> ! {
-    let fdt = unsafe { fdt.sub(0x80000000).add(0xffffffff80000000) };
-
-    let boot_info = BootInfo::new(fdt, hart_id);
+extern "C" fn rust_entry(hart_id: u64, fdt_addr: usize) -> ! {
+    let boot_info = BootInfo::new(fdt_addr, hart_id);
 
     memory::set_memory_info(boot_info.memory_info);
 
@@ -39,6 +37,8 @@ pub struct BootInfo {
     pub resv_count: usize,
     pub resv: [MemoryRange; 16],
     pub cpus: usize,
+
+    pub fdt_addr: usize,
 
     pub boot_cpu: u64,
 }
@@ -114,7 +114,8 @@ impl BootInfo {
         (resv_count, resv)
     }
 
-    fn new(fdt: *const u8, hart_id: u64) -> BootInfo {
+    fn new(fdt_addr: usize, hart_id: u64) -> BootInfo {
+        let fdt = (fdt_addr - 0x80000000 + 0xffffffff80000000) as *const u8;
         let fdt_info = FdtInfo::new(fdt);
 
         let mut memory: Option<MemoryRange> = None;
@@ -189,6 +190,8 @@ impl BootInfo {
             resv_count,
             resv,
             cpus,
+
+            fdt_addr,
 
             boot_cpu: hart_id,
         }
