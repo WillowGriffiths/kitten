@@ -29,7 +29,12 @@ pub fn new_thread(func: impl FnOnce() + Send + 'static) -> Box<ThreadContext> {
     let func_boxed: Box<dyn FnOnce()> = Box::new(func);
     let func_boxed_boxed = Box::new(func_boxed);
 
-    let stack = Box::into_raw(unsafe { Box::new_zeroed().assume_init() });
+    let stack = unsafe {
+        let mut boxed = Box::<ThreadStack>::new_uninit();
+        boxed.as_mut_ptr().write_bytes(0, 1);
+        Box::into_raw(boxed.assume_init())
+    };
+
     let registers = [0; 31];
 
     let stack_top = stack as usize + THREAD_STACK_SIZE;

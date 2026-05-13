@@ -126,6 +126,10 @@ impl BuddyInner {
                 (boot_info.memory_info.memory.phys + boot_info.memory_info.memory.len) as usize;
             let len = allocation_end - memory_end;
 
+            log::debug!(
+                "max_order: {max_order}, allocation_end: {allocation_end}, memory_end: {memory_end}"
+            );
+
             inner.reserve_range(memory_end, len);
 
             inner.can_alloc = true;
@@ -198,6 +202,7 @@ impl BuddyInner {
         }
     }
 
+    // reserve a physical address range
     fn reserve_range(&mut self, start: usize, len: usize) {
         let (addr_start, _) = memory::ram_start();
 
@@ -290,8 +295,10 @@ impl BuddyInner {
             self.grow()?;
         }
 
+        let desired_size = layout.size().max(layout.align());
+
         let desired_order = (0..=self.max_order)
-            .find(|&i| BUDDY_ORDER0 * 2_usize.pow(i as u32) >= layout.size())
+            .find(|&i| BUDDY_ORDER0 * 2_usize.pow(i as u32) >= desired_size)
             .expect("Allocation too big!") as u32;
 
         fn inner(
@@ -546,15 +553,10 @@ impl SlabAllocator {
                 .as_ptr() as *mut u8;
 
             *(new_page as *mut SlabAllocatorHeader) = SlabAllocatorHeader {
-                next_page: ptr::null_mut(),
+                next_page: lock.next_page,
             };
 
-            let mut cursor = &mut lock.next_page;
-            while !(*cursor).is_null() {
-                let ptr = (*cursor) as *mut SlabAllocatorHeader;
-                cursor = &mut (*ptr).next_page;
-            }
-            *cursor = new_page;
+            lock.next_page = new_page;
 
             let first_slot = new_page.byte_add(lock.offset) as *mut SlabAllocatorLink;
 
@@ -683,10 +685,16 @@ impl AutoAllocatorInner {
         unsafe {
             let allocator = self.get_allocator(layout);
 
-            allocator
+            log::trace!("making allocation of size {}", layout.size());
+
+            let ret = allocator
                 .allocate(layout)
                 .map(|mut val| val.as_mut().as_mut_ptr())
-                .unwrap_or(ptr::null_mut())
+                .unwrap_or(ptr::null_mut());
+
+            log::trace!("made allocation of size {}", layout.size());
+
+            ret
         }
     }
 

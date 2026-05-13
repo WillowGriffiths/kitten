@@ -14,7 +14,10 @@ mod sync;
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::arch::{boot::BootInfo, thread};
+use crate::{
+    arch::{boot::BootInfo, thread},
+    multicore::BootRes,
+};
 
 const BOOT_MESSAGE: &str = include_str!("./boot_message.txt");
 
@@ -22,7 +25,7 @@ struct Logger;
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Debug
+        metadata.level() <= log::Level::Trace
     }
 
     fn log(&self, record: &log::Record) {
@@ -73,9 +76,47 @@ fn panic(info: &PanicInfo) -> ! {
     arch::reset(arch::ResetType::Shutdown, arch::ResetReason::SystemFailure);
 }
 
-pub fn secondary_main(boot_res: multicore::BootRes) -> ! {
+#[allow(clippy::large_enum_variant)]
+pub enum BootData {
+    Primary(BootInfo),
+    Secondary(BootRes),
+}
+
+pub fn main(data: BootData) -> ! {
+    if let BootData::Primary(boot_info) = data {
+        let mut writer = arch::CONSOLE_WRITER.lock();
+        _ = write!(writer, "{BOOT_MESSAGE}");
+        drop(writer);
+
+        log::set_logger(&LOGGER)
+            .map(|()| log::set_max_level(log::LevelFilter::Info))
+            .unwrap();
+
+        log::debug!("{boot_info:#?}");
+
+        log::info!("booting on cpu {}", boot_info.boot_cpu);
+
+        allocator::setup(&boot_info);
+        multicore::init(&boot_info);
+
+        log::info!("free ram: {}", allocator::free_ram());
+    }
+
+    let cpu_id = match &data {
+        BootData::Primary(boot_info) => boot_info.boot_cpu,
+        BootData::Secondary(boot_res) => boot_res.cpu_id,
+    };
+
+    let mut boot_res = match data {
+        BootData::Primary(_) => None,
+        BootData::Secondary(boot_res) => Some(boot_res),
+    };
+
     let thread = thread::new_thread(move || {
-        log::info!("hello from cpu {}", boot_res.cpu_id);
+        log::info!("hello from cpu {}", cpu_id);
+
+        // drop the old stack
+        _ = boot_res.take();
 
         loop {
             arch::wfi();
@@ -83,25 +124,4 @@ pub fn secondary_main(boot_res: multicore::BootRes) -> ! {
     });
 
     thread::switch_to_thread(thread);
-}
-
-pub fn main(boot_info: BootInfo) -> ! {
-    let mut writer = arch::CONSOLE_WRITER.lock();
-    _ = write!(writer, "{BOOT_MESSAGE}");
-    drop(writer);
-
-    log::set_logger(&LOGGER)
-        .map(|()| log::set_max_level(log::LevelFilter::Info))
-        .unwrap();
-
-    log::info!("booting on cpu {}", boot_info.boot_cpu);
-
-    allocator::setup(&boot_info);
-    multicore::init(&boot_info);
-
-    log::info!("free ram: {}", allocator::free_ram());
-
-    loop {
-        arch::wfi();
-    }
 }

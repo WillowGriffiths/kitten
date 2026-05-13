@@ -16,12 +16,18 @@ pub struct BootRes {
     pub stack: Box<CpuStack>,
 }
 
+unsafe impl Send for BootRes {}
+
 pub fn init(boot_info: &BootInfo) {
     let cpus = (0..(boot_info.cpus - 1) as u64)
         .map(|i| {
             let index = if i < boot_info.boot_cpu { i } else { i + 1 };
 
-            let stack = unsafe { Box::new_uninit().assume_init() };
+            let stack = unsafe {
+                let mut boxed = Box::<CpuStack>::new_uninit();
+                boxed.as_mut_ptr().write_bytes(0, 1);
+                boxed.assume_init()
+            };
             let stack_top = unsafe { (&raw const *stack as *const u8).byte_add(STACK_SIZE) };
 
             let res = Box::new(BootRes {

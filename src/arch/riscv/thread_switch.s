@@ -11,6 +11,9 @@ thread_switch:
     li t0, 1 << 8
     csrs sstatus, t0
 
+    li t0, 1 << 5
+    csrc sstatus, t0
+
     mv tp, a0
 
     ld x1, 0(tp)

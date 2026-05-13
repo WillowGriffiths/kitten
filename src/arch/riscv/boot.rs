@@ -22,7 +22,7 @@ extern "C" fn rust_entry(hart_id: u64, fdt: *const u8) -> ! {
 
     pagetable::setup(&boot_info.memory_info);
 
-    crate::main(boot_info);
+    crate::main(crate::BootData::Primary(boot_info));
 }
 
 #[unsafe(no_mangle)]
@@ -30,10 +30,10 @@ extern "C" fn secondary_rust_entry(boot_res_phys: usize) {
     let boot_res_virt = memory::to_virt(boot_res_phys as u64) as *mut BootRes;
     let boot_res = unsafe { Box::from_raw(boot_res_virt) };
 
-    crate::secondary_main(*boot_res);
+    crate::main(crate::BootData::Secondary(*boot_res));
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct BootInfo {
     pub memory_info: MemoryInfo,
     pub resv_count: usize,
@@ -130,7 +130,7 @@ impl BootInfo {
 
                     memory = Some(Self::parse_memory(&mut node));
                 } else if node.name == "reserved-memory" {
-                    if memory.is_some() {
+                    if resv.is_some() {
                         panic!("multiple reserved-memory nodes");
                     }
 

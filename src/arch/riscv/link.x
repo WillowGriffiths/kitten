@@ -60,7 +60,7 @@ SECTIONS
 
     .kstack : AT(. - DIFF) {
         . = ALIGN(16);
-        . += 4K * 8;
+        . += 8M;
         __stack_top = .;
     }
 
