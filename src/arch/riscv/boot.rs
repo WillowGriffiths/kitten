@@ -163,19 +163,23 @@ impl BootInfo {
 
         let resv = resv.unwrap_or((0, [MemoryRange { start: 0, len: 0 }; 16]));
 
-        let resv_count = resv.0 + 1;
-        let mut resv = resv.1;
-        if resv_count > resv.len() {
-            panic!("Too many reserved sections");
-        }
-
         let fdt_memory = fdt_info.memory_range();
         let fdt_memory_physical = MemoryRange {
             start: fdt_memory.start - kernel_mapping.virt + kernel_mapping.phys,
             len: fdt_memory.len,
         };
 
-        resv[resv_count - 1] = fdt_memory_physical;
+        let resv_count = resv.0 + 2;
+        let mut resv = resv.1;
+        if resv_count > resv.len() {
+            panic!("Too many reserved sections");
+        }
+
+        resv[resv_count - 2] = fdt_memory_physical;
+        resv[resv_count - 1] = MemoryRange {
+            start: kernel_mapping.phys,
+            len: kernel_mapping.len,
+        };
 
         BootInfo {
             memory_info: MemoryInfo {
