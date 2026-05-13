@@ -41,9 +41,8 @@ impl log::Log for Logger {
 
             _ = writeln!(
                 writer,
-                "{}:{} {color_code}{}{color_reset} - {}",
-                record.file().unwrap(),
-                record.line().unwrap(),
+                "[{} {color_code}{}{color_reset}] {}",
+                record.target(),
                 record.level(),
                 record.args()
             );
