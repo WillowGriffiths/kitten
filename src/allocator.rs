@@ -134,13 +134,13 @@ impl BuddyInner {
         }
     }
 
-    fn grow(&mut self) {
+    fn grow(&mut self) -> Result<(), AllocError> {
         unsafe {
             log::debug!("buddy allocator: growing!");
 
             self.needs_grow = false;
 
-            let new_page = self.alloc(Layout::new::<memory::Page>()) as *mut Page;
+            let new_page = self.alloc(Layout::new::<memory::Page>())?.as_ptr() as *mut Page;
             assert!(!new_page.is_null());
 
             Self::init_page(new_page);
@@ -160,6 +160,8 @@ impl BuddyInner {
             self.first_page = new_page;
 
             self.capacity += count;
+
+            Ok(())
         }
     }
 
@@ -281,11 +283,11 @@ impl BuddyInner {
         );
     }
 
-    fn alloc(&mut self, layout: Layout) -> *mut u8 {
+    fn alloc(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         assert!(self.can_alloc);
 
         if self.needs_grow {
-            self.grow();
+            self.grow()?;
         }
 
         let desired_order = (0..=self.max_order)
@@ -353,13 +355,14 @@ impl BuddyInner {
             desired_order,
             start_addr as usize,
         ) {
-            addr as *mut u8
+            let ptr = NonNull::new(addr as *mut u8).unwrap();
+            Ok(NonNull::slice_from_raw_parts(ptr, layout.size()))
         } else {
-            ptr::null_mut()
+            Err(AllocError)
         }
     }
 
-    fn dealloc(&mut self, ptr: *mut u8) {
+    fn dealloc(&mut self, ptr: NonNull<u8>) {
         fn inner(
             this: &mut BuddyInner,
             addr: usize,
@@ -403,7 +406,7 @@ impl BuddyInner {
 
         let (_, start_addr) = memory::ram_start();
 
-        let addr = ptr as usize;
+        let addr = ptr.as_ptr() as usize;
         inner(
             self,
             addr,
@@ -442,12 +445,12 @@ impl BuddyAllocator {
     }
 }
 
-unsafe impl GlobalAlloc for BuddyAllocator {
-    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+unsafe impl Allocator for BuddyAllocator {
+    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.inner.lock().as_mut().unwrap().alloc(layout)
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, _layout: core::alloc::Layout) {
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, _layout: Layout) {
         self.inner.lock().as_mut().unwrap().dealloc(ptr)
     }
 }
@@ -487,9 +490,10 @@ impl SlabAllocator {
         (first, rest)
     }
 
-    pub fn new<T>(name: &'static str) -> SlabAllocator {
-        let first_page =
-            unsafe { BUDDY_ALLOCATOR.alloc_zeroed(Layout::new::<Page>()) as *mut Page };
+    pub fn new<T>(name: &'static str) -> Result<SlabAllocator, AllocError> {
+        let first_page = BUDDY_ALLOCATOR
+            .allocate_zeroed(Layout::new::<Page>())?
+            .as_ptr() as *mut Page;
 
         assert!(!first_page.is_null());
 
@@ -530,17 +534,16 @@ impl SlabAllocator {
                 SlabAllocatorFirstHeader(SpinLock::new(inner));
         }
 
-        SlabAllocator(first_page)
+        Ok(SlabAllocator(first_page))
     }
 
-    unsafe fn grow(&self, lock: &mut SpinLockGuard<SlabAllocatorInner>) -> Option<()> {
+    unsafe fn grow(&self, lock: &mut SpinLockGuard<SlabAllocatorInner>) -> Result<(), AllocError> {
         unsafe {
             log::debug!("{}: growing!", lock.name);
 
-            let new_page = BUDDY_ALLOCATOR.alloc(Layout::new::<memory::Page>());
-            if new_page.is_null() {
-                return None;
-            }
+            let new_page = BUDDY_ALLOCATOR
+                .allocate(Layout::new::<memory::Page>())?
+                .as_ptr() as *mut u8;
 
             *(new_page as *mut SlabAllocatorHeader) = SlabAllocatorHeader {
                 next_page: ptr::null_mut(),
@@ -571,7 +574,7 @@ impl SlabAllocator {
 
             lock.available += available;
 
-            Some(())
+            Ok(())
         }
     }
 }
@@ -591,7 +594,7 @@ unsafe impl Allocator for SlabAllocator {
                 return Err(AllocError);
             }
 
-            if lock.available < REALLOCATE_THRESHOLD && self.grow(&mut lock).is_none() {
+            if lock.available < REALLOCATE_THRESHOLD && self.grow(&mut lock).is_err() {
                 log::error!("{}: failed to grow slab", lock.name);
 
                 return Err(AllocError);
@@ -643,40 +646,42 @@ struct AutoAllocatorInner {
 impl AutoAllocatorInner {
     fn new() -> AutoAllocatorInner {
         AutoAllocatorInner {
-            size_8: SlabAllocator::new::<[u64; 1]>("auto_size_8"),
-            size_16: SlabAllocator::new::<[u64; 2]>("auto_size_16"),
-            size_32: SlabAllocator::new::<[u64; 4]>("auto_size_32"),
-            size_64: SlabAllocator::new::<[u64; 8]>("auto_size_64"),
-            size_128: SlabAllocator::new::<[u64; 16]>("auto_size_128"),
-            size_256: SlabAllocator::new::<[u64; 32]>("auto_size_256"),
-            size_512: SlabAllocator::new::<[u64; 64]>("auto_size_512"),
-            size_1k: SlabAllocator::new::<[u64; 128]>("auto_size_1k"),
+            size_8: SlabAllocator::new::<[u64; 1]>("auto_size_8").unwrap(),
+            size_16: SlabAllocator::new::<[u64; 2]>("auto_size_16").unwrap(),
+            size_32: SlabAllocator::new::<[u64; 4]>("auto_size_32").unwrap(),
+            size_64: SlabAllocator::new::<[u64; 8]>("auto_size_64").unwrap(),
+            size_128: SlabAllocator::new::<[u64; 16]>("auto_size_128").unwrap(),
+            size_256: SlabAllocator::new::<[u64; 32]>("auto_size_256").unwrap(),
+            size_512: SlabAllocator::new::<[u64; 64]>("auto_size_512").unwrap(),
+            size_1k: SlabAllocator::new::<[u64; 128]>("auto_size_1k").unwrap(),
+        }
+    }
+
+    fn get_allocator(&mut self, layout: Layout) -> &dyn Allocator {
+        if layout.align() > mem::align_of::<u64>() || layout.size() > 1024 {
+            &BUDDY_ALLOCATOR
+        } else if layout.size() <= 8 {
+            &self.size_8
+        } else if layout.size() <= 16 {
+            &self.size_16
+        } else if layout.size() <= 32 {
+            &self.size_32
+        } else if layout.size() <= 64 {
+            &self.size_64
+        } else if layout.size() <= 128 {
+            &self.size_128
+        } else if layout.size() <= 256 {
+            &self.size_256
+        } else if layout.size() <= 512 {
+            &self.size_512
+        } else {
+            &self.size_1k
         }
     }
 
     fn alloc(&mut self, layout: Layout) -> *mut u8 {
         unsafe {
-            if layout.align() > 8 || layout.size() > 1024 {
-                return BUDDY_ALLOCATOR.alloc(layout);
-            }
-
-            let allocator = if layout.size() <= 8 {
-                self.size_8
-            } else if layout.size() <= 16 {
-                self.size_16
-            } else if layout.size() <= 32 {
-                self.size_32
-            } else if layout.size() <= 64 {
-                self.size_64
-            } else if layout.size() <= 128 {
-                self.size_128
-            } else if layout.size() <= 256 {
-                self.size_256
-            } else if layout.size() <= 512 {
-                self.size_512
-            } else {
-                self.size_1k
-            };
+            let allocator = self.get_allocator(layout);
 
             allocator
                 .allocate(layout)
@@ -687,28 +692,7 @@ impl AutoAllocatorInner {
 
     fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
         unsafe {
-            if layout.align() > 8 || layout.size() > 1024 {
-                BUDDY_ALLOCATOR.dealloc(ptr, layout);
-                return;
-            }
-
-            let allocator = if layout.size() <= 8 {
-                self.size_8
-            } else if layout.size() <= 16 {
-                self.size_16
-            } else if layout.size() <= 32 {
-                self.size_32
-            } else if layout.size() <= 64 {
-                self.size_64
-            } else if layout.size() <= 128 {
-                self.size_128
-            } else if layout.size() <= 256 {
-                self.size_256
-            } else if layout.size() <= 512 {
-                self.size_512
-            } else {
-                self.size_1k
-            };
+            let allocator = self.get_allocator(layout);
 
             allocator.deallocate(NonNull::new(ptr).unwrap(), layout);
         }
