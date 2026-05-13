@@ -14,7 +14,7 @@ mod sync;
 
 use core::{fmt::Write, panic::PanicInfo};
 
-use crate::arch::boot::BootInfo;
+use crate::arch::{boot::BootInfo, thread};
 
 const BOOT_MESSAGE: &str = include_str!("./boot_message.txt");
 
@@ -75,11 +75,15 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 pub fn secondary_main(boot_res: smt::BootRes) -> ! {
-    log::info!("hello from cpu {}", boot_res.cpu_id);
+    let thread = thread::new_thread(move || {
+        log::info!("hello from cpu {}", boot_res.cpu_id);
 
-    loop {
-        arch::wfi();
-    }
+        loop {
+            arch::wfi();
+        }
+    });
+
+    thread::switch_to_thread(thread);
 }
 
 pub fn main(boot_info: BootInfo) -> ! {
