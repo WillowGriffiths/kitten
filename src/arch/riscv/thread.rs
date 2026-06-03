@@ -25,6 +25,7 @@ extern "C" fn thread_entry(func: Box<Box<dyn FnOnce()>>) -> ! {
     func();
 
     loop {
+        // TODO: kill thread
         crate::arch::wfi();
     }
 }
@@ -40,17 +41,15 @@ impl Thread {
             Box::into_raw(boxed.assume_init())
         };
 
-        let registers = [0; 31];
-
-        let stack_top = stack as usize + THREAD_STACK_SIZE;
+        let stack_top = unsafe { stack.byte_add(THREAD_STACK_SIZE) };
 
         let mut thread = Thread {
             stack,
-            registers,
+            registers: [0; 31],
             pc: thread_entry as *const () as usize,
         };
 
-        thread.registers[1] = stack_top; // x2 (sp)
+        thread.registers[1] = stack_top as usize; // x2 (sp)
         thread.registers[9] = Box::into_raw(func_boxed_boxed) as usize; // x10 (a0)
 
         thread

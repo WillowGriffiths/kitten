@@ -1,9 +1,13 @@
 use core::{
-    mem, ptr,
-    sync::atomic::{AtomicPtr, AtomicUsize},
+    alloc::Layout,
+    cell::UnsafeCell,
+    mem,
+    ptr::{self, NonNull},
+    sync::atomic::AtomicUsize,
 };
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::alloc::{AllocError, Allocator};
+use alloc::{self, boxed::Box, vec::Vec};
 
 use crate::{
     DeviceTreeInfo,
@@ -31,28 +35,64 @@ pub struct BootRes {
 
 unsafe impl Send for BootRes {}
 
+const _: () = assert!(mem::offset_of!(CpuCtx, irq_stack_top) == 0);
+const _: () = assert!(mem::offset_of!(CpuCtx, user_scratch) == 8);
+const _: () = assert!(mem::offset_of!(CpuCtx, current_task) == 16);
+
+// irq_stack_top: immutable.
+// user_sp_scratch: IRQ-only; not atomic.
+// current_task: IRQ-only; not atomic.
+// last_time: IRQ-only; not atomic.
+//
+// cpu_id: immutable.
+// scheduler: blocks preemption; not atomic.
+// preempt_count: used as a memory barrier; atomic.
+#[repr(C)]
 pub struct CpuCtx {
+    pub irq_stack_top: NonNull<u8>,
+    pub user_scratch: UnsafeCell<usize>,
+    pub current_task: UnsafeCell<*mut Task>,
+    pub last_time: UnsafeCell<usize>,
+
     pub cpu_id: usize,
-    pub current_task: AtomicPtr<Task>,
     pub scheduler: Scheduler,
     pub preempt_count: AtomicUsize,
 }
+
+unsafe impl Sync for CpuCtx {}
 
 const _: () = {
     const fn is_sync<T: Sync>() {}
     is_sync::<CpuCtx>();
 };
 
-pub fn create_ctx(cpu_id: usize, device_tree_info: DeviceTreeInfo) {
-    let ctx = Box::leak(Box::new(CpuCtx {
+pub fn create_ctx(cpu_id: usize) -> Result<(), AllocError> {
+    let irq_stack: NonNull<u8> = alloc::alloc::Global
+        .allocate(Layout::new::<CpuStack>())?
+        .cast();
+    let irq_stack_top = unsafe { irq_stack.byte_add(STACK_SIZE) };
+
+    let ctx: &mut CpuCtx = unsafe {
+        alloc::alloc::Global
+            .allocate(Layout::new::<CpuCtx>())?
+            .cast()
+            .as_mut()
+    };
+
+    *ctx = CpuCtx {
+        irq_stack_top,
+        user_scratch: UnsafeCell::new(0),
+        current_task: UnsafeCell::new(ptr::null_mut()),
+        last_time: UnsafeCell::new(arch::get_time()),
+
         cpu_id,
-        current_task: AtomicPtr::new(ptr::null_mut()),
-        scheduler: Scheduler::new(device_tree_info.timebase_frequency)
-            .expect("Failed to create scheduler"),
+        scheduler: Scheduler::new()?,
         preempt_count: 0.into(),
-    }));
+    };
 
     arch::store_ctx(ctx);
+
+    Ok(())
 }
 
 pub fn get_ctx() -> &'static CpuCtx {

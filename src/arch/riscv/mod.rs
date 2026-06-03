@@ -3,6 +3,7 @@ use core::arch::asm;
 pub mod boot;
 pub mod pagetable;
 
+pub mod interrupts;
 mod sbi;
 pub mod thread;
 pub use sbi::*;
@@ -27,6 +28,17 @@ pub fn get_ctx() -> &'static CpuCtx {
     unsafe {
         let addr: usize;
         asm!("csrr {addr}, sscratch", addr = out(reg) addr);
-        (addr as *const CpuCtx).as_ref().unwrap()
+        (addr as *mut CpuCtx).as_mut().unwrap()
+    }
+}
+
+#[inline(always)]
+pub fn get_time() -> usize {
+    unsafe {
+        let time: usize;
+
+        asm!("csrr {time}, time", time = out(reg) time);
+
+        time
     }
 }

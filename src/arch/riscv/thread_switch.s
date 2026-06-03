@@ -7,12 +7,9 @@ thread_switch:
     ld t0, 248(a0)
     csrw sepc, t0
 
-    // set the SPP bit to stay in s-mode
-    li t0, 1 << 8
+    li t0, 1 << 8 // SPP (supervisor previous privilege)
+    ori t0, t0, 1 << 5 // SPIE (supervisor previous interrupt enable)
     csrs sstatus, t0
-
-    li t0, 1 << 5
-    csrc sstatus, t0
 
     ld x1, 0(a0)
     ld x2, 8(a0)

@@ -1,36 +1,61 @@
-use core::{alloc::Layout, ptr::NonNull};
+use core::{alloc::Layout, mem, ptr::NonNull};
 
 use alloc::alloc::{AllocError, Allocator};
 
 use crate::{
     arch::{self, thread::Thread},
+    global_data, smp,
     sync::Critical,
 };
 
-struct SchedulerInner {
-    timebase_frequency: usize,
+const TIMESLICE_DIV: usize = 100;
 
+struct SchedulerInner {
     tasks_head: NonNull<Task>,
 }
 
+const _: () = assert!(mem::offset_of!(Task, thread) == 0);
+
+#[repr(C)]
 pub struct Task {
+    thread: Thread,
+
+    skip: bool,
+
     next: NonNull<Task>,
     prev: NonNull<Task>,
 
-    thread: Thread,
-    reschedule: bool,
+    runtime: usize,
+    pub reschedule: bool,
+}
+
+impl Task {
+    pub fn tick(&mut self, ticks: usize) {
+        self.runtime += ticks;
+
+        if self.runtime > global_data().timebase_frequency / TIMESLICE_DIV {
+            self.reschedule = true;
+        }
+    }
+
+    pub fn enter(&mut self) -> ! {
+        self.thread.switch_to_thread();
+    }
 }
 
 impl SchedulerInner {
-    fn new(timebase_frequency: usize) -> Result<SchedulerInner, AllocError> {
-        let sleep_task = Self::create_task(|| {
+    fn new() -> Result<SchedulerInner, AllocError> {
+        let mut sleep_task = Self::create_task(|| {
             loop {
                 arch::wfi();
             }
         })?;
 
+        unsafe {
+            sleep_task.as_mut().skip = true;
+        }
+
         Ok(SchedulerInner {
-            timebase_frequency,
             tasks_head: sleep_task,
         })
     }
@@ -46,8 +71,12 @@ impl SchedulerInner {
                 next: task,
                 prev: task,
 
+                skip: false,
+
                 thread,
                 reschedule: false,
+
+                runtime: 0,
             };
 
             Ok(task)
@@ -70,9 +99,19 @@ impl SchedulerInner {
         }
     }
 
-    fn schedule(&mut self) -> ! {
+    fn schedule(&mut self) {
         unsafe {
-            self.tasks_head.as_mut().thread.switch_to_thread();
+            let mut task = self.tasks_head;
+
+            *smp::get_ctx().current_task.get() = task.as_ptr();
+
+            self.tasks_head = task.as_mut().next;
+            if self.tasks_head.as_mut().skip {
+                self.tasks_head = self.tasks_head.as_mut().next;
+            }
+
+            task.as_mut().runtime = 0;
+            task.as_mut().reschedule = false;
         }
     }
 }
@@ -84,17 +123,28 @@ pub struct Scheduler(Critical<SchedulerInner>);
 unsafe impl Sync for Scheduler {}
 
 impl Scheduler {
-    pub fn new(timebase_frequency: usize) -> Result<Scheduler, AllocError> {
-        Ok(Scheduler(Critical::new(SchedulerInner::new(
-            timebase_frequency,
-        )?)))
+    pub fn new() -> Result<Scheduler, AllocError> {
+        Ok(Scheduler(Critical::new(SchedulerInner::new()?)))
     }
 
     pub fn spawn(&self, f: impl FnMut() + Send + 'static) -> Result<(), AllocError> {
         unsafe { self.0.lock() }.spawn(f)
     }
 
-    pub fn schedule(&self) -> ! {
+    pub fn schedule(&self) {
         unsafe { self.0.lock() }.schedule();
+    }
+}
+
+pub fn sleep(ms: usize) {
+    let ticks = global_data().timebase_frequency * ms / 1000;
+    let start = arch::get_time();
+    let end = start + ticks;
+
+    loop {
+        let now = arch::get_time();
+        if now >= end {
+            return;
+        }
     }
 }

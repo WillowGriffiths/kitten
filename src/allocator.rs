@@ -1,5 +1,6 @@
 use core::{
     alloc::{Allocator, GlobalAlloc, Layout},
+    cell::UnsafeCell,
     mem,
     ptr::{self, NonNull},
 };
@@ -659,7 +660,7 @@ impl AutoAllocatorInner {
         }
     }
 
-    fn get_allocator(&mut self, layout: Layout) -> &dyn Allocator {
+    fn get_allocator(&self, layout: Layout) -> &dyn Allocator {
         if layout.align() > mem::align_of::<u64>() || layout.size() > 1024 {
             &BUDDY_ALLOCATOR
         } else if layout.size() <= 8 {
@@ -681,7 +682,7 @@ impl AutoAllocatorInner {
         }
     }
 
-    fn alloc(&mut self, layout: Layout) -> *mut u8 {
+    fn alloc(&self, layout: Layout) -> *mut u8 {
         unsafe {
             let allocator = self.get_allocator(layout);
 
@@ -692,13 +693,17 @@ impl AutoAllocatorInner {
                 .map(|mut val| val.as_mut().as_mut_ptr())
                 .unwrap_or(ptr::null_mut());
 
-            log::trace!("made allocation of size {}", layout.size());
+            log::trace!(
+                "made allocation of size {}, {} remaining",
+                layout.size(),
+                BUDDY_ALLOCATOR.free_ram()
+            );
 
             ret
         }
     }
 
-    fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+    fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe {
             let allocator = self.get_allocator(layout);
 
@@ -708,27 +713,41 @@ impl AutoAllocatorInner {
 }
 
 struct AutoAllocator {
-    inner: SpinLock<Option<AutoAllocatorInner>>,
+    inner: UnsafeCell<Option<AutoAllocatorInner>>,
 }
 
 impl AutoAllocator {
     fn init(&self) {
-        let mut lock = self.inner.lock();
-        assert!(lock.is_none());
+        let inner = unsafe { &mut *self.inner.get() };
+        assert!(inner.is_none());
 
-        let inner = AutoAllocatorInner::new();
-
-        *lock = Some(inner);
+        *inner = Some(AutoAllocatorInner::new());
     }
 }
 
 unsafe impl GlobalAlloc for AutoAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        self.inner.lock().as_mut().unwrap().alloc(layout)
+        unsafe {
+            self.inner
+                .get()
+                .as_mut()
+                .unwrap_unchecked()
+                .as_mut()
+                .unwrap()
+                .alloc(layout)
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        self.inner.lock().as_mut().unwrap().dealloc(ptr, layout)
+        unsafe {
+            self.inner
+                .get()
+                .as_mut()
+                .unwrap_unchecked()
+                .as_mut()
+                .unwrap()
+                .dealloc(ptr, layout)
+        }
     }
 }
 
@@ -736,7 +755,7 @@ unsafe impl Sync for AutoAllocator {}
 
 #[global_allocator]
 static AUTO_ALLOCATOR: AutoAllocator = AutoAllocator {
-    inner: SpinLock::new(None),
+    inner: UnsafeCell::new(None),
 };
 
 pub fn free_ram() -> memory::Size {

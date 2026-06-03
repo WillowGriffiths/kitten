@@ -8,12 +8,13 @@ extern crate alloc;
 mod allocator;
 mod arch;
 mod device_tree;
+mod interrupts;
 mod memory;
 mod scheduler;
 mod smp;
 mod sync;
 
-use core::{fmt::Write, panic::PanicInfo};
+use core::{cell::UnsafeCell, fmt::Write, panic::PanicInfo};
 
 use crate::{
     arch::boot::BootInfo,
@@ -118,6 +119,20 @@ pub struct DeviceTreeInfo {
     timebase_frequency: usize,
 }
 
+pub struct GlobalData {
+    timebase_frequency: usize,
+}
+
+struct GlobalDataContainer(UnsafeCell<Option<GlobalData>>);
+
+unsafe impl Sync for GlobalDataContainer {}
+
+static GLOBAL_DATA: GlobalDataContainer = GlobalDataContainer(UnsafeCell::new(None));
+
+pub fn global_data() -> &'static GlobalData {
+    unsafe { (&*GLOBAL_DATA.0.get()).as_ref().unwrap_unchecked() }
+}
+
 // boot.rs parses the device tree for certain essential properties. After
 // further initialisation, we can do some more sophisticated parsing with the
 // power of the heap at our disposal.
@@ -144,7 +159,7 @@ fn parse_device_tree(boot_info: &BootInfo) -> DeviceTreeInfo {
 }
 
 pub fn main(data: BootData) -> ! {
-    let (cpu_id, mut our_stack, device_tree_info) = match data {
+    let (cpu_id, mut our_stack) = match data {
         BootData::Primary(boot_info) => {
             let mut writer = arch::CONSOLE_WRITER.lock();
             _ = write!(writer, "{BOOT_MESSAGE}");
@@ -160,6 +175,13 @@ pub fn main(data: BootData) -> ! {
 
             allocator::setup(&boot_info);
             let device_tree_info = parse_device_tree(&boot_info);
+
+            unsafe {
+                *GLOBAL_DATA.0.get() = Some(GlobalData {
+                    timebase_frequency: device_tree_info.timebase_frequency,
+                });
+            }
+
             smp::init(&boot_info, device_tree_info);
 
             log::info!(
@@ -169,32 +191,55 @@ pub fn main(data: BootData) -> ! {
 
             log::info!("free ram: {}", allocator::free_ram());
 
-            (boot_info.boot_cpu as usize, None, device_tree_info)
+            (boot_info.boot_cpu as usize, None)
         }
-        BootData::Secondary(boot_res) => (
-            boot_res.cpu_id,
-            Some(boot_res.stack),
-            boot_res.device_tree_info,
-        ),
+        BootData::Secondary(boot_res) => (boot_res.cpu_id, Some(boot_res.stack)),
     };
 
-    smp::create_ctx(cpu_id, device_tree_info);
+    log::trace!("initialising context");
+
+    smp::create_ctx(cpu_id).expect("Failed to initialise cpu context");
+
+    log::trace!("initialising interrupts");
+
+    interrupts::init();
+
+    log::trace!("spawning threads");
 
     smp::get_ctx()
         .scheduler
         .spawn(move || {
             let cpu_id = smp::get_ctx().cpu_id;
 
-            log::info!("hello from cpu {}", cpu_id);
-
             // drop the old stack
             _ = our_stack.take();
 
             loop {
-                arch::wfi();
+                log::info!("hello from cpu {}", cpu_id);
+
+                scheduler::sleep(500);
             }
         })
         .expect("failed to spawn task");
 
+    smp::get_ctx()
+        .scheduler
+        .spawn(move || {
+            let cpu_id = smp::get_ctx().cpu_id;
+
+            loop {
+                log::info!("hello again from cpu {}", cpu_id);
+
+                scheduler::sleep(1000);
+            }
+        })
+        .expect("failed to spawn task");
+
+    log::trace!("scheduling");
+
     smp::get_ctx().scheduler.schedule();
+
+    log::trace!("entering");
+
+    unsafe { (**smp::get_ctx().current_task.get()).enter() };
 }

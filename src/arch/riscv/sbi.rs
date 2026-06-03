@@ -220,3 +220,15 @@ pub fn start_cpu(index: usize, data: Box<BootRes>) {
         0,
     );
 }
+
+pub fn schedule_timer(time: usize) {
+    sbi_call(
+        consts::EID_TIMER,
+        consts::FID_TIMER_SET_TIMER,
+        time,
+        0,
+        0,
+        0,
+        0,
+    );
+}
